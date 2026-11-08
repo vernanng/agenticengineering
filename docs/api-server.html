@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API server · How it works</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --color-link:    #2e5aa8;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; margin-bottom: 0.75rem; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+    h2 {
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 2rem 0 0.75rem;
+    }
+    p.sub, p.caption {
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: var(--color-muted);
+      max-width: 75ch;
+    }
+    p.caption { margin-bottom: 0.5rem; }
+    code { font-family: var(--font-mono); font-size: 0.8em; }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture + Sequence · Diagram Design</p>
+    <h1>API server: how it works</h1>
+    <p class="sub">The Fastify hub (<code>server.ts</code>) sits between the browser chat client and the
+      <code>muse serve</code> subprocess. The host facade (<code>host.ts</code>) holds sessions, parks approval
+      decisions, and fans SDK notifications out to browsers. Config comes only from <code>.env</code>
+      (<code>PORT</code>, <code>museBin</code>, <code>workspaceRoot</code>).</p>
+
+    <h2>1 · Where everything lives</h2>
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="api-arch-title api-arch-desc">
+        <title id="api-arch-title">API server architecture</title>
+        <desc id="api-arch-desc">Architecture diagram showing the browser, the Fastify hub, the host facade, the SDK client, and the muse serve subprocess.</desc>
+        <defs>
+          <marker id="arch-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arch-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arch-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Zones -->
+        <rect x="20" y="120" width="170" height="260" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="79" y="124" width="52" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="105" y="133" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CLIENT</text>
+
+        <rect x="210" y="120" width="330" height="260" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="323" y="124" width="104" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="375" y="133" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">HUB · FASTIFY</text>
+
+        <rect x="560" y="120" width="376" height="260" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="686" y="124" width="124" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="748" y="133" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">HOST · SDK · DAEMON</text>
+
+        <!-- Arrows (behind nodes) -->
+        <line x1="170" y1="228" x2="232" y2="228" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arch-arrow-link)"/>
+        <line x1="240" y1="252" x2="178" y2="252" stroke="#bf4520" stroke-width="1.4" marker-end="url(#arch-arrow-accent)"/>
+        <line x1="410" y1="228" x2="576" y2="228" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <line x1="650" y1="276" x2="650" y2="284" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <line x1="734" y1="322" x2="750" y2="322" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <path d="M800,348 V412 Q800,420 792,420 H128 Q120,420 120,412 V272"
+              fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arch-arrow)"/>
+
+        <!-- Arrow labels (masked, beside their strokes) -->
+        <rect x="186" y="208" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="204" y="217" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POST</text>
+        <rect x="188" y="258" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="202" y="267" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSE</text>
+        <rect x="479" y="208" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="497" y="217" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TURN</text>
+        <rect x="442" y="400" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="474" y="409" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">NOTIFY·SSE</text>
+
+        <!-- Node: Browser -->
+        <rect x="40" y="200" width="130" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="200" width="130" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <rect x="48" y="208" width="28" height="12" rx="2" fill="transparent" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="62" y="217" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+        <text x="105" y="244" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Browser</text>
+        <text x="105" y="260" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">chat UI</text>
+
+        <!-- Node: Hub (focal) -->
+        <rect x="240" y="196" width="170" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="240" y="196" width="170" height="80" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <rect x="248" y="204" width="28" height="12" rx="2" fill="transparent" stroke="rgba(191,69,32,0.50)" stroke-width="0.8"/>
+        <text x="262" y="213" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HUB</text>
+        <text x="325" y="244" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Hub routes</text>
+        <text x="325" y="260" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">POST turn · /events</text>
+
+        <!-- Node: Static -->
+        <rect x="240" y="292" width="170" height="60" rx="6" fill="#f5f5f5"/>
+        <rect x="240" y="292" width="170" height="60" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <rect x="248" y="300" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+        <text x="262" y="309" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WEB</text>
+        <text x="325" y="330" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Static dist</text>
+        <text x="325" y="344" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">client/dist</text>
+
+        <!-- Node: Host facade -->
+        <rect x="584" y="196" width="150" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="584" y="196" width="150" height="80" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <rect x="592" y="204" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.22)" stroke-width="0.8"/>
+        <text x="608" y="213" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HOST</text>
+        <text x="659" y="244" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Host facade</text>
+        <text x="659" y="260" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sessions · fan-out</text>
+
+        <!-- Node: SDK -->
+        <rect x="584" y="292" width="150" height="60" rx="6" fill="#f5f5f5"/>
+        <rect x="584" y="292" width="150" height="60" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <rect x="592" y="300" width="28" height="12" rx="2" fill="transparent" stroke="rgba(79,93,117,0.50)" stroke-width="0.8"/>
+        <text x="606" y="309" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SDK</text>
+        <text x="659" y="330" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">MuseClient</text>
+        <text x="659" y="344" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MSP · fold</text>
+
+        <!-- Node: Daemon -->
+        <rect x="758" y="196" width="154" height="152" rx="6" fill="#f5f5f5"/>
+        <rect x="758" y="196" width="154" height="152" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <rect x="766" y="204" width="28" height="12" rx="2" fill="transparent" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="780" y="213" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+        <text x="835" y="268" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">muse serve</text>
+        <text x="835" y="284" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">museBin binary</text>
+        <text x="835" y="298" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">cwd workspaceRoot</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="500" x2="920" y2="500" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="516" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="528" width="16" height="12" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="62" y="537" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Hub (focal)</text>
+        <line x1="180" y1="534" x2="206" y2="534" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arch-arrow-link)"/>
+        <text x="212" y="537" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">HTTP · SSE</text>
+        <line x1="320" y1="534" x2="346" y2="534" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <text x="352" y="537" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">internal call</text>
+        <line x1="452" y1="534" x2="478" y2="534" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arch-arrow)"/>
+        <text x="484" y="537" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">async return</text>
+        <rect x="592" y="528" width="30" height="12" rx="2" fill="transparent" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="600" y="537" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+        <text x="628" y="537" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">external</text>
+      </svg>
+    </div>
+    <p class="caption">Left to right: the browser posts turns and opens one <code>GET /events</code> stream per
+      session; the hub validates, maps errors (404 unknown session, 410 stale approval, 400 bad input), and serves
+      <code>client/dist</code>; the facade routes each call to its session, and the SDK multiplexes one
+      <code>muse serve</code> child. Notifications flow back along the dashed path to every listening tab.</p>
+
+    <h2>2 · A turn, end to end</h2>
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="api-seq-title api-seq-desc">
+        <title id="api-seq-title">Turn lifecycle sequence</title>
+        <desc id="api-seq-desc">Sequence diagram showing a turn moving from browser through hub and host to the daemon, with approval and cancel options and a closing turn-ended event.</desc>
+        <defs>
+          <marker id="seq-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="seq-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="seq-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+          <marker id="seq-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Lifelines -->
+        <line x1="120" y1="100" x2="120" y2="612" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="360" y1="100" x2="360" y2="612" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="600" y1="100" x2="600" y2="612" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="840" y1="100" x2="840" y2="612" stroke="rgba(45,49,66,0.22)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- Activation bars -->
+        <rect x="356" y="150" width="8" height="168" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="596" y="182" width="8" height="104" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+        <rect x="836" y="214" width="8" height="40" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+        <!-- OPT 1: approval -->
+        <rect x="96" y="334" width="528" height="124" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <rect x="96" y="334" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="116" y="346" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+        <text x="148" y="346" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[approval requested]</text>
+
+        <!-- OPT 2: cancel -->
+        <rect x="96" y="470" width="768" height="92" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <rect x="96" y="470" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="116" y="482" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+        <text x="148" y="482" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[user cancels]</text>
+
+        <!-- Messages -->
+        <line x1="120" y1="150" x2="348" y2="150" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#seq-arrow-link)"/>
+        <line x1="364" y1="182" x2="588" y2="182" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#seq-arrow)"/>
+        <line x1="604" y1="214" x2="828" y2="214" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#seq-arrow)"/>
+        <line x1="836" y1="246" x2="612" y2="246" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#seq-arrow)"/>
+        <line x1="596" y1="278" x2="372" y2="278" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#seq-arrow)"/>
+        <line x1="356" y1="310" x2="128" y2="310" stroke="#bf4520" stroke-width="1.4" marker-end="url(#seq-arrow-accent)"/>
+        <line x1="356" y1="390" x2="128" y2="390" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#seq-arrow-open)"/>
+        <line x1="120" y1="414" x2="348" y2="414" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#seq-arrow-link)"/>
+        <line x1="364" y1="438" x2="588" y2="438" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#seq-arrow)"/>
+        <line x1="120" y1="524" x2="348" y2="524" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#seq-arrow-link)"/>
+        <line x1="600" y1="548" x2="832" y2="548" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#seq-arrow)"/>
+        <line x1="360" y1="588" x2="128" y2="588" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#seq-arrow-open)"/>
+
+        <!-- Message labels -->
+        <rect x="206" y="130" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="139" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POST /TURN</text>
+        <rect x="446" y="162" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="480" y="171" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SEND TURN</text>
+        <rect x="682" y="194" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="716" y="203" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">USER TURN</text>
+        <rect x="694" y="226" width="48" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="718" y="235" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ACK ID</text>
+        <rect x="454" y="258" width="48" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="478" y="267" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ACK ID</text>
+        <rect x="210" y="290" width="60" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="299" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TURN ID</text>
+        <rect x="210" y="370" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="238" y="379" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSE ASK</text>
+        <rect x="206" y="394" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="403" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POST DECIDE</text>
+        <rect x="447" y="418" width="60" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="477" y="427" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RESOLVE</text>
+        <rect x="206" y="504" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="513" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POST CANCEL</text>
+        <rect x="682" y="528" width="68" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="716" y="537" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TURN/CANCEL</text>
+        <rect x="200" y="568" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="238" y="577" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TURN ENDED</text>
+
+        <!-- Actors -->
+        <rect x="50" y="48" width="140" height="52" rx="6" fill="#f5f5f5"/>
+        <rect x="50" y="48" width="140" height="52" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="120" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Browser</text>
+        <text x="120" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">chat UI</text>
+
+        <rect x="290" y="48" width="140" height="52" rx="6" fill="#f5f5f5"/>
+        <rect x="290" y="48" width="140" height="52" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="360" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Hub</text>
+        <text x="360" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">server.ts</text>
+
+        <rect x="530" y="48" width="140" height="52" rx="6" fill="#f5f5f5"/>
+        <rect x="530" y="48" width="140" height="52" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="600" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Host</text>
+        <text x="600" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">host.ts</text>
+
+        <rect x="770" y="48" width="140" height="52" rx="6" fill="#f5f5f5"/>
+        <rect x="770" y="48" width="140" height="52" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="840" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Daemon</text>
+        <text x="840" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">muse serve</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="640" x2="920" y2="640" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="656" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <line x1="40" y1="672" x2="66" y2="672" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#seq-arrow-link)"/>
+        <text x="72" y="675" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">sync call</text>
+        <line x1="168" y1="672" x2="194" y2="672" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#seq-arrow)"/>
+        <text x="200" y="675" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">return</text>
+        <line x1="280" y1="672" x2="306" y2="672" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#seq-arrow-open)"/>
+        <text x="312" y="675" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">async push</text>
+        <line x1="412" y1="672" x2="438" y2="672" stroke="#bf4520" stroke-width="1.4" marker-end="url(#seq-arrow-accent)"/>
+        <text x="444" y="675" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">headline reply</text>
+        <rect x="566" y="666" width="40" height="12" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+        <text x="612" y="675" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">OPT fragment</text>
+      </svg>
+    </div>
+    <p class="caption">Before any turn, the browser opens <code>GET /events</code>: the hub runs
+      <code>snapshot()</code> first (a stale session fails 404 before headers), then streams
+      <code>ready</code>, <code>snapshot</code>, and the live tail — one session only, plus a
+      <code>: ping</code> every 25 s. The <code>turn/ended</code> push is emitted from
+      <code>turn.completed</code> too, so a terminal the broadcast never carried still reaches the tab.
+      Every response carries <code>x-response-time</code>.</p>
+  </div>
+</body>
+</html>
