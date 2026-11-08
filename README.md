@@ -14,6 +14,7 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 
 - `npm run dev` — start the project (watch mode).
 - `npm start` — start the project.
+- `npm run build:client` — rebuild the browser client.
 - `npm test` — run the full test suite.
 
 ## Code Map
@@ -23,4 +24,5 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 - `client/` — browser chat client (built to `client/dist`, served by the hub).
   Reshape it via `client/src/shape.ts` (`layout`, `showStats`, `showTraffic`);
   panels are one component tag each in `client/src/App.svelte`, state lives in
-  `client/src/lib/chat.svelte.ts`.
+  `client/src/lib/chat.svelte.ts`. LWC elements live in
+  `client/src/modules/<ns>/<name>/`; see `client/README.md`.
