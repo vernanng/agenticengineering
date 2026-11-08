@@ -27,7 +27,7 @@
 
   let entries = $state<Entry[]>([]);
   let traffic = $state<TrafficLine[]>([]);
-  let trafficHidden = $state(true);
+  let trafficHidden = $state(false);
   let sessionId = $state<string | null>(null);
   let runningTurnId = $state<string | null>(null);
   let stopping = $state(false);
@@ -41,6 +41,23 @@
   const items = new Map<string, number>(); // itemId -> entry id
   const entryById = new Map<number, Entry>(); // entry id -> entry, skips the full-list scan
   const seenItems = new Set<string>();
+
+  const pendingApprovalEntries = $derived(entries.filter((e) => e.type === "approval" && !e.resolved));
+  const pendingInputEntries = $derived(entries.filter((e) => e.type === "userinput" && !e.settled));
+  const messageCount = $derived(entries.filter((e) => e.type === "msg").length);
+  const turnCount = $derived(
+    entries.filter((e) => e.type === "term" && e.text.startsWith("turn ")).length,
+  );
+  const errorCount = $derived(entries.filter((e) => e.type === "msg" && e.kind === "error").length);
+  const connection = $derived(bootError ? "offline" : sessionId ? "live" : "starting");
+
+  function approvalTitle(r: ApprovalRequest): string {
+    return r.subject?.title ?? r.toolCallId ?? r.subject?.kind ?? "tool call";
+  }
+
+  function scrollToId(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   function pushEntry(e: Entry) {
     entries.push(e);
@@ -340,78 +357,188 @@
   });
 </script>
 
-<header>
-  <h1>Muse Chat</h1>
-  <span class="sess">{sessionId ?? ""}</span>
-  <select bind:value={selectedProfile} onchange={newSession} title="Permission profile for new chats">
-    <option value="">Host default</option>
-    {#each profiles as p}
-      <option value={p.profileId} title={p.description ?? ""}>{p.label}</option>
-    {/each}
-  </select>
-  <button class="ghost" onclick={() => (trafficHidden = !trafficHidden)}>Traffic</button>
-  <button class="ghost" onclick={newSession}>New chat</button>
-</header>
-{#if fingerprintWarning}
-  <div id="warn">{fingerprintWarning}</div>
-{/if}
-{#if bootError}
-  <div id="warn">
-    {bootError}
-    <button
-      class="ghost"
-      style="margin-top:8px;"
-      onclick={() => {
-        bootError = null;
-        init().catch((e) => (bootError = "Could not reach the chat server. (" + e.message + ")"));
-      }}
-    >Retry</button>
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div class="brandtext">
+      <h1>Agent Engineering</h1>
+      <span class="sub">Session operations</span>
+    </div>
   </div>
-{/if}
-<main id="log">
-  {#each entries as e (e.id)}
-    {#if e.type === "msg"}
-      <div class="msg {e.cls}" class:streaming={e.streaming}>
-        <div class="kind">{e.kind}</div>
-        <div>{e.text}</div>
+  <div class="topmeta">
+    <span class="status" data-state={connection}>
+      <span class="dot" aria-hidden="true"></span>
+      {connection === "live" ? (runningTurnId ? "working" : "live") : connection}
+    </span>
+    {#if runningTurnId}
+      <span class="runid" title={runningTurnId}>turn {runningTurnId.slice(0, 8)}…</span>
+    {/if}
+    <span class="sess" title={sessionId ?? ""}>{sessionId ?? "connecting…"}</span>
+  </div>
+  <div class="topactions">
+    <label class="visually-hidden" for="profile">Permission profile</label>
+    <select id="profile" bind:value={selectedProfile} onchange={newSession} title="Permission profile for new chats">
+      <option value="">Host default</option>
+      {#each profiles as p}
+        <option value={p.profileId} title={p.description ?? ""}>{p.label}</option>
+      {/each}
+    </select>
+    <button class="ghost" onclick={() => (trafficHidden = !trafficHidden)} aria-expanded={!trafficHidden}>
+      {trafficHidden ? "Show traffic" : "Hide traffic"}
+    </button>
+    <button class="ghost" onclick={newSession}>New chat</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="side" aria-label="Session overview">
+    <nav aria-label="Dashboard sections">
+      <button class="navlink" onclick={() => scrollToId("panel-chat")}>Chat</button>
+      <button class="navlink" onclick={() => scrollToId("panel-attention")}>
+        Approvals
+        {#if pendingApprovalEntries.length + pendingInputEntries.length > 0}
+          <span class="badge">{pendingApprovalEntries.length + pendingInputEntries.length}</span>
+        {/if}
+      </button>
+      <button class="navlink" onclick={() => scrollToId("panel-traffic")}>Traffic</button>
+      <button class="navlink" onclick={() => scrollToId("panel-session")}>Session</button>
+    </nav>
+
+    <section class="panel" aria-label="Run figures">
+      <h2>Run figures</h2>
+      <dl class="stats">
+        <div><dt>Messages</dt><dd>{messageCount}</dd></div>
+        <div><dt>Turns done</dt><dd>{turnCount}</dd></div>
+        <div><dt>Open approvals</dt><dd>{pendingApprovalEntries.length}</dd></div>
+        <div><dt>Open questions</dt><dd>{pendingInputEntries.length}</dd></div>
+        <div><dt>Traffic events</dt><dd>{traffic.length}</dd></div>
+        <div><dt>Errors</dt><dd>{errorCount}</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" id="panel-session" aria-label="Session details">
+      <h2>Session</h2>
+      <p class="sessfull">{sessionId ?? "connecting…"}</p>
+      <p class="muted">
+        {runningTurnId ? `Turn ${runningTurnId} running.` : "Idle. Send a message to start a turn."}
+      </p>
+      {#if fingerprintWarning}
+        <p class="warn">{fingerprintWarning}</p>
+      {/if}
+    </section>
+  </aside>
+
+  <main class="center" id="panel-chat">
+    {#if fingerprintWarning}
+      <div class="warnbanner" role="status">{fingerprintWarning}</div>
+    {/if}
+    {#if bootError}
+      <div class="warnbanner" role="alert">
+        {bootError}
+        <button
+          class="ghost"
+          onclick={() => {
+            bootError = null;
+            init().catch((e) => (bootError = "Could not reach the chat server. (" + e.message + ")"));
+          }}
+        >Retry</button>
       </div>
-    {:else if e.type === "term"}
-      <div class="terminal">{e.text}</div>
-    {:else if e.type === "approval"}
-      <ApprovalCard
-        request={e.request}
-        {sessionId}
-        resolved={e.resolved}
-        {sink}
-        onDecided={pushTerm}
-        onError={pushError}
-      />
-    {:else if e.type === "userinput"}
-      <UserInputCard
-        request={e.request}
-        {sessionId}
-        settled={e.settled}
-        {sink}
-        onSettled={() => {
-          e.settled = true;
-          pendingInputs.delete(e.request.userInputId);
-        }}
-        onError={pushError}
-      />
     {/if}
-  {/each}
-</main>
-<div id="traffic" hidden={trafficHidden}>
-  {#each traffic as t (t.id)}
-    <div class={t.dir === "in" ? "tin" : "tout"}>{t.dir === "in" ? "← " : "→ "}{t.label}</div>
-    {#if t.text !== null}
-      <pre title={t.title}>{t.text}</pre>
-    {/if}
-  {/each}
+
+    <div id="log" aria-live="polite">
+      {#each entries as e (e.id)}
+        {#if e.type === "msg"}
+          <div class="msg {e.cls}" class:streaming={e.streaming}>
+            <div class="kind">{e.kind}</div>
+            <div>{e.text}</div>
+          </div>
+        {:else if e.type === "term"}
+          <div class="terminal">{e.text}</div>
+        {:else if e.type === "approval"}
+          <ApprovalCard
+            request={e.request}
+            {sessionId}
+            resolved={e.resolved}
+            {sink}
+            onDecided={pushTerm}
+            onError={pushError}
+          />
+        {:else if e.type === "userinput"}
+          <UserInputCard
+            request={e.request}
+            {sessionId}
+            settled={e.settled}
+            {sink}
+            onSettled={() => {
+              e.settled = true;
+              pendingInputs.delete(e.request.userInputId);
+            }}
+            onError={pushError}
+          />
+        {/if}
+      {/each}
+      {#if entries.length === 0}
+        <div class="empty">
+          <h2>No activity yet</h2>
+          <p>Send the first message below. Turns, tool output, approvals, and questions appear here in order.</p>
+        </div>
+      {/if}
+    </div>
+  </main>
+
+  <aside class="inspector" aria-label="Attention and traffic">
+    <section class="panel" id="panel-attention" aria-label="Needs attention">
+      <h2>Needs attention</h2>
+      {#if pendingApprovalEntries.length === 0 && pendingInputEntries.length === 0}
+        <p class="muted">All clear. New approvals and tool questions will queue here.</p>
+      {:else}
+        <ul class="queue">
+          {#each pendingApprovalEntries as e (e.id)}
+            {#if e.type === "approval"}
+              <li><span class="tag">approval</span> {approvalTitle(e.request)}</li>
+            {/if}
+          {/each}
+          {#each pendingInputEntries as e (e.id)}
+            {#if e.type === "userinput"}
+              <li>
+                <span class="tag">question</span>
+                {e.request.toolName ?? "tool"} · {(e.request.questions ?? []).length} question{(e.request.questions ?? []).length === 1 ? "" : "s"}
+              </li>
+            {/if}
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <section class="panel" id="panel-traffic" aria-label="Protocol traffic" hidden={trafficHidden}>
+      <h2>Traffic</h2>
+      {#if traffic.length === 0}
+        <p class="muted">No API or stream events yet.</p>
+      {:else}
+        <ol class="trafficlist">
+          {#each traffic as t (t.id)}
+            <li>
+              <div class={t.dir === "in" ? "tin" : "tout"}>{t.dir === "in" ? "← " : "→ "}{t.label}</div>
+              {#if t.text !== null}
+                <pre title={t.title}>{t.text}</pre>
+              {/if}
+            </li>
+          {/each}
+        </ol>
+      {/if}
+    </section>
+  </aside>
 </div>
+
 <footer>
   <form onsubmit={send}>
-    <input bind:value={composerText} autocomplete="off" placeholder="Ask Muse anything about this workspace…" />
+    <label class="visually-hidden" for="composer">Message Muse</label>
+    <input
+      id="composer"
+      bind:value={composerText}
+      autocomplete="off"
+      placeholder="Ask Muse anything about this workspace…"
+    />
     {#if runningTurnId}
       <button type="button" disabled={stopping} onclick={stop}>Stop</button>
     {:else}
