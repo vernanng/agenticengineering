@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export class UnknownSessionError extends Error {}
 export class UnknownApprovalError extends Error {}
@@ -31,7 +32,8 @@ export interface Host {
   close(): Promise<void>;
 }
 
-const PUBLIC = path.join(process.cwd(), "client", "dist");
+// File-relative so it works whether cwd is the root or server/.
+const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../client/dist");
 
 const MIME: Record<string, string> = {
   ".html": "text/html",

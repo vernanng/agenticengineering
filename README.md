@@ -7,7 +7,7 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 
 ## Setup
 
-- `npm install` — installs root and `client/` deps.
+- `npm install` — installs `server/` and `client/` workspaces.
 - Copy `.env.example` to `.env` and set `PORT`, `museBin`, `workspaceRoot`.
 
 ## Commands
@@ -18,6 +18,6 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 
 ## Code Map
 
-- `src/` — application source (`index.ts`, `config.ts`, `host.ts`, `server.ts`).
-- `test/` — automated tests.
+- `server/src/` — application source (`index.ts`, `config.ts`, `host.ts`, `server.ts`).
+- `server/test/` — automated tests.
 - `client/` — browser chat client (built to `client/dist`, served by the hub).

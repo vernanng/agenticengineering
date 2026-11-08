@@ -1,22 +1,17 @@
 {
   "name": "agenticengineering",
   "version": "0.1.0",
-  "module": "src/index.ts",
-  "type": "module",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
   "scripts": {
-    "postinstall": "npm --prefix client install",
-    "dev": "node --watch --env-file=.env src/index.ts",
-    "dev:bun": "bun --watch run src/index.ts",
+    "dev": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
     "build:client": "npm --prefix client run build",
     "prestart": "npm run build:client",
-    "start": "node --env-file=.env src/index.ts",
-    "start:bun": "bun run src/index.ts",
-    "test": "node --test test/"
-  },
-  "dependencies": {
-    "@muse-code/sdk": "1.4.14",
-    "@types/node": "^26.6.6",
-    "fastify": "^5.12.8"
+    "start": "npm --prefix server run start",
+    "test": "npm --prefix server run test"
   }
 }
