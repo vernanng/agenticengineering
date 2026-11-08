@@ -45,12 +45,12 @@ function fakeHost() {
 
 async function withServer(host: Parameters<typeof createServer>[0], fn: (base: string) => Promise<void>) {
   const server = createServer(host);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as { port: number };
+  await server.listen({ port: 0, host: "127.0.0.1" });
+  const { port } = server.server.address() as { port: number };
   try {
     await fn(`http://127.0.0.1:${port}`);
   } finally {
-    server.close();
+    await server.close();
   }
 }
 

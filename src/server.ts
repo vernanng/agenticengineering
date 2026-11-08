@@ -1,4 +1,4 @@
-import http from "node:http";
+import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -31,36 +31,17 @@ export interface Host {
   close(): Promise<void>;
 }
 
-function readBody(req: http.IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (c) => {
-      raw += c;
-      if (raw.length > 1_000_000) reject(new Error("body too large"));
-    });
-    req.on("end", () => {
-      try {
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch (e) {
-        reject(e);
-      }
-    });
-    req.on("error", reject);
-  });
-}
+const PUBLIC = path.join(process.cwd(), "client", "dist");
 
-const PUBLIC = path.join(process.cwd(), "public");
-
-function json(res: http.ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(data));
-}
-
-function statusOf(e: unknown): number {
-  if (e instanceof UnknownSessionError) return 404;
-  if (e instanceof UnknownApprovalError) return 410;
-  return 500;
-}
+const MIME: Record<string, string> = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
 
 function validAnswers(body: unknown): body is { userInputId: string; answers: UserInputAnswerInput[] } {
   if (!body || typeof body !== "object") return false;
@@ -78,14 +59,73 @@ function validAnswers(body: unknown): body is { userInputId: string; answers: Us
   );
 }
 
-async function route(host: Host, req: http.IncomingMessage, res: http.ServerResponse) {
-  const url = new URL(req.url ?? "/", "http://localhost");
+const sessionBody = {
+  type: "object",
+  properties: { profile: { type: ["string", "null"] } },
+} as const;
+
+const turnBody = {
+  type: "object",
+  properties: { sessionId: { type: "string" }, text: { type: "string" } },
+  required: ["text"],
+} as const;
+
+const cancelBody = {
+  type: "object",
+  properties: { sessionId: { type: "string" }, turnId: { type: "string" } },
+} as const;
+
+const approvalBody = {
+  type: "object",
+  properties: {
+    sessionId: { type: "string" },
+    approvalId: { type: "string" },
+    choiceId: { type: "string" },
+  },
+  required: ["approvalId", "choiceId"],
+} as const;
+
+export function createServer(host: Host): FastifyInstance {
+  const app = Fastify({ bodyLimit: 1_000_000 });
+
+  // Middleware: every response carries its own latency.
+  const started = new WeakMap<object, number>();
+  app.addHook("onRequest", (req, _reply, done) => {
+    started.set(req, Date.now());
+    done();
+  });
+  app.addHook("onSend", (req, reply, payload, done) => {
+    reply.header("x-response-time", `${Date.now() - (started.get(req) ?? Date.now())}ms`);
+    done(null, payload);
+  });
+
+  app.setErrorHandler((err, req, reply) => {
+    if (err instanceof UnknownSessionError) {
+      reply.code(404).send({ error: err.message.slice(0, 300) });
+      return;
+    }
+    if (err instanceof UnknownApprovalError) {
+      reply.code(410).send({ error: err.message.slice(0, 300) });
+      return;
+    }
+    const status = typeof err.statusCode === "number" ? err.statusCode : 500;
+    if (status >= 500) {
+      req.log.error(err);
+      reply.code(500).send({ error: "internal error" });
+      return;
+    }
+    reply.code(status).send({ error: err.message.slice(0, 300) });
+  });
 
   // SSE stream of hub events. Snapshot first so a reconnect recovers
   // missed items, approvals, and questions; the live tail follows.
-  if (url.pathname === "/events" && req.method === "GET") {
-    const sessionId = url.searchParams.get("sessionId") ?? host.defaultSessionId;
+  // The snapshot runs before headers, so a stale session gets a 404.
+  app.get("/events", async (req, reply) => {
+    const sessionId =
+      (req.query as { sessionId?: string } | undefined)?.sessionId ?? host.defaultSessionId;
     const snap = host.snapshot(sessionId);
+    reply.hijack();
+    const res = reply.raw;
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -98,123 +138,102 @@ async function route(host: Host, req: http.IncomingMessage, res: http.ServerResp
     send("snapshot", snap);
     const off = host.onEvent(send);
     const heartbeat = setInterval(() => res.write(": ping\n\n"), 25000);
-    req.on("close", () => {
+    req.raw.on("close", () => {
       clearInterval(heartbeat);
       off();
     });
-    return;
-  }
+  });
 
-  if (url.pathname === "/api/status" && req.method === "GET") {
-    json(res, 200, {
-      sessionId: host.defaultSessionId,
-      serverInfo: host.serverInfo,
-      fingerprintWarning: host.fingerprintWarning ?? null,
-    });
-    return;
-  }
+  app.get("/api/status", async () => ({
+    sessionId: host.defaultSessionId,
+    serverInfo: host.serverInfo,
+    fingerprintWarning: host.fingerprintWarning ?? null,
+  }));
 
-  if (url.pathname === "/api/profiles" && req.method === "GET") {
+  app.get("/api/profiles", async () => {
     try {
-      json(res, 200, await host.listProfiles());
+      return await host.listProfiles();
     } catch (e) {
       console.error("profiles:", e);
-      json(res, 200, { profiles: [] });
+      return { profiles: [] };
     }
-    return;
-  }
+  });
 
-  if (url.pathname === "/api/session" && req.method === "POST") {
-    const body = (await readBody(req)) as { profile?: string | null };
+  app.post("/api/session", { schema: { body: sessionBody } }, async (req) => {
+    const body = req.body as { profile?: string | null };
     try {
       const sessionId = await host.startSession(body.profile);
-      json(res, 200, { sessionId, profile: body.profile ?? null });
+      return { sessionId, profile: body.profile ?? null };
     } catch (e) {
-      json(res, 400, { error: String(e).slice(0, 300) });
+      throw Object.assign(new Error(String(e).slice(0, 300)), { statusCode: 400 });
     }
-    return;
-  }
+  });
 
-  if (url.pathname === "/api/history" && req.method === "GET") {
-    const sessionId = url.searchParams.get("sessionId") ?? host.defaultSessionId;
-    json(res, 200, { history: host.history(sessionId) });
-    return;
-  }
+  app.get("/api/history", async (req) => {
+    const sessionId =
+      (req.query as { sessionId?: string } | undefined)?.sessionId ?? host.defaultSessionId;
+    return { history: host.history(sessionId) };
+  });
 
-  if (url.pathname === "/api/turn" && req.method === "POST") {
-    const body = (await readBody(req)) as { sessionId?: string; text?: string };
+  app.post("/api/turn", { schema: { body: turnBody } }, async (req) => {
+    const body = req.body as { sessionId?: string; text?: string };
     if (typeof body.text !== "string" || !body.text.trim()) {
-      json(res, 400, { error: "text is required" });
-      return;
+      throw Object.assign(new Error("text is required"), { statusCode: 400 });
     }
-    json(res, 200, await host.sendTurn(body.sessionId ?? host.defaultSessionId, body.text));
-    return;
-  }
+    return host.sendTurn(body.sessionId ?? host.defaultSessionId, body.text);
+  });
 
-  if (url.pathname === "/api/turn/cancel" && req.method === "POST") {
-    const body = (await readBody(req)) as { sessionId?: string; turnId?: string };
-    if (body.turnId !== undefined && typeof body.turnId !== "string") {
-      json(res, 400, { error: "turnId must be a string" });
-      return;
-    }
-    json(res, 200, await host.cancelTurn(body.sessionId ?? host.defaultSessionId, body.turnId));
-    return;
-  }
+  app.post("/api/turn/cancel", { schema: { body: cancelBody } }, async (req) => {
+    const body = req.body as { sessionId?: string; turnId?: string };
+    return host.cancelTurn(body.sessionId ?? host.defaultSessionId, body.turnId);
+  });
 
   // The facade answers through its parked approval handler, which checks the
   // choice against the server's current offer; no requirementId needed.
-  if (url.pathname === "/api/approval" && req.method === "POST") {
-    const body = (await readBody(req)) as { sessionId?: string; approvalId?: string; choiceId?: string };
+  app.post("/api/approval", { schema: { body: approvalBody } }, async (req) => {
+    const body = req.body as { sessionId?: string; approvalId?: string; choiceId?: string };
     if (typeof body.approvalId !== "string" || typeof body.choiceId !== "string") {
-      json(res, 400, { error: "approvalId and choiceId are required" });
-      return;
+      throw Object.assign(new Error("approvalId and choiceId are required"), { statusCode: 400 });
     }
     host.decideApproval(body.sessionId ?? host.defaultSessionId, body.approvalId, body.choiceId);
-    json(res, 200, { approvalId: body.approvalId, choiceId: body.choiceId });
-    return;
-  }
-
-  if (url.pathname === "/api/user-input" && req.method === "POST") {
-    const body = (await readBody(req)) as { sessionId?: string } & Record<string, unknown>;
-    if (!validAnswers(body)) {
-      json(res, 400, { error: "userInputId and one answer per question are required" });
-      return;
-    }
-    json(
-      res,
-      200,
-      await host.answerUserInput(body.sessionId ?? host.defaultSessionId, body.userInputId, body.answers),
-    );
-    return;
-  }
-
-  // Static frontend.
-  const file = url.pathname === "/" ? "/index.html" : url.pathname;
-  const target = path.normalize(path.join(PUBLIC, file));
-  if (!target.startsWith(PUBLIC) || !fs.existsSync(target) || fs.statSync(target).isDirectory()) {
-    res.writeHead(404);
-    res.end("not found");
-    return;
-  }
-  const type = target.endsWith(".html")
-    ? "text/html"
-    : target.endsWith(".js")
-      ? "text/javascript"
-      : "text/plain";
-  res.writeHead(200, { "Content-Type": type });
-  fs.createReadStream(target).pipe(res);
-}
-
-export function createServer(host: Host): http.Server {
-  return http.createServer(async (req, res) => {
-    try {
-      await route(host, req, res);
-    } catch (e) {
-      if (res.headersSent) {
-        res.end();
-        return;
-      }
-      json(res, statusOf(e), { error: String(e).slice(0, 300) });
-    }
+    return { approvalId: body.approvalId, choiceId: body.choiceId };
   });
+
+  app.post("/api/user-input", async (req) => {
+    const body = req.body as { sessionId?: string } & Record<string, unknown>;
+    if (!validAnswers(body)) {
+      throw Object.assign(new Error("userInputId and one answer per question are required"), {
+        statusCode: 400,
+      });
+    }
+    return host.answerUserInput(
+      body.sessionId ?? host.defaultSessionId,
+      body.userInputId,
+      body.answers,
+    );
+  });
+
+  // Static frontend. Unmatched methods and paths land here, as before.
+  app.all("/*", async (req, reply) => {
+    const url = new URL(req.raw.url ?? "/", "http://localhost");
+    const file = url.pathname === "/" ? "/index.html" : url.pathname;
+    const target = path.normalize(path.join(PUBLIC, file));
+    if (!target.startsWith(PUBLIC + path.sep)) {
+      return reply.code(404).send("not found");
+    }
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(target);
+    } catch {
+      return reply.code(404).send("not found");
+    }
+    if (stat.isDirectory()) {
+      return reply.code(404).send("not found");
+    }
+    return reply
+      .type(MIME[path.extname(target).toLowerCase()] ?? "text/plain")
+      .send(fs.createReadStream(target));
+  });
+
+  return app;
 }
