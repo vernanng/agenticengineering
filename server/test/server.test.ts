@@ -42,7 +42,10 @@ function fakeHost() {
     },
     history: (sessionId: string) => {
       if (sessionId !== "sess-1") throw new UnknownSessionError(sessionId);
-      return { mode: "inline" as const, items: [{ itemId: "i1", kind: "userMessage", text: "hi" }] };
+      return {
+        mode: "inline" as const,
+        items: ["i1", "i2", "i3", "i4", "i5"].map((itemId) => ({ itemId, kind: "userMessage", text: "hi" })),
+      };
     },
     snapshot: (sessionId: string) => {
       if (sessionId !== "sess-1") throw new UnknownSessionError(sessionId);
@@ -136,8 +139,27 @@ describe("hub routes", () => {
       const res = await fetch(`${base}/api/history?sessionId=sess-1`);
       assert.equal(res.status, 200);
       assert.deepEqual(await res.json(), {
-        history: { mode: "inline", items: [{ itemId: "i1", kind: "userMessage", text: "hi" }] },
+        history: {
+          mode: "inline",
+          items: ["i1", "i2", "i3", "i4", "i5"].map((itemId) => ({ itemId, kind: "userMessage", text: "hi" })),
+        },
       });
+    });
+  });
+
+  it("pages history with ?limit= and falls back on sloppy values", async () => {
+    const { host } = fakeHost();
+    await withServer(host, async (base) => {
+      const ids = async (q: string) => {
+        const res = await fetch(`${base}/api/history?sessionId=sess-1${q}`);
+        assert.equal(res.status, 200);
+        return ((await res.json()) as { history: { items: { itemId: string }[] } }).history.items.map(
+          (i) => i.itemId,
+        );
+      };
+      assert.deepEqual(await ids("&limit=2"), ["i4", "i5"]);
+      assert.deepEqual(await ids("&limit=2abc"), ["i1", "i2", "i3", "i4", "i5"]);
+      assert.deepEqual(await ids("&limit=0"), ["i1", "i2", "i3", "i4", "i5"]);
     });
   });
 

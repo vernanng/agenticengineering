@@ -96,7 +96,7 @@ const approvalBody = {
 // push the limit into the fold once the SDK supports bounded reads.
 function queryLimit(query: unknown, fallback = 50): number {
   const raw = (query as { limit?: unknown } | undefined)?.limit;
-  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : Number.NaN;
+  const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(n) && (n as number) > 0 ? Math.min(n as number, 200) : fallback;
 }
 

@@ -21,7 +21,9 @@ if (fs.existsSync(DOTENV)) {
   }
 }
 
-const QUESTION_TYPES = new Set(["noul", "choice", "score", "box"]);
+// No "box": the client cannot upload images yet, so a box question could
+// never be answered (see JudgePage). Re-add it with the upload.
+const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 export function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
@@ -52,8 +54,8 @@ export function validEvaluateBody(body: unknown): body is {
       instructions.length > 8000
     )
       return false;
-    // Shape per question type (docs/primitives): a choice needs its option
-    // map and a score its level list, or the upstream call fails after a 200.
+    // Shape per question type (see the TypeSafe quickstart): a choice needs
+    // its option map and a score its level list, or the upstream call fails after a 200.
     if (type === "choice")
       return !!criteria && typeof criteria === "object" && !Array.isArray(criteria) && Object.keys(criteria).length > 0;
     if (type === "score") return Array.isArray(criteria) && criteria.length >= 2;

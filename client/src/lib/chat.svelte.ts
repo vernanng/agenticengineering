@@ -56,6 +56,8 @@ export class ChatStore {
   entryById = new Map<number, Entry>(); // entry id -> entry, skips the full-list scan
   // shortcut: seenItems grows with lifetime itemIds; scope it per session reset only (see newSession).
   seenItems = new Set<string>();
+  // Terminal lines for turns that ended before their ack arrived; folded on adopt, cleared on newSession.
+  endedTurns = new Map<string, string>();
   pendingApprovals = new Set<string>();
   pendingInputs = new Set<string>();
   es: EventSource | null = null;
@@ -234,18 +236,24 @@ export class ChatStore {
     } else if (method === "turn/completed") {
       // Stale or duplicate completions (a turn/ended already folded this
       // turn, or a new turn started) must not print a second terminal line.
+      // Still recorded: the ack may land after the end (see sendText).
+      const completedText =
+        `turn ${params.turnId} ${params.terminal}` +
+        (params.error ? `: ${params.error.message ?? params.error.kind}` : "");
+      this.endedTurns.set(params.turnId, completedText);
       if (params.turnId === this.runningTurnId) {
-        this.finishTurn(
-          params.turnId,
-          `turn ${params.turnId} ${params.terminal}` +
-            (params.error ? `: ${params.error.message ?? params.error.kind}` : ""),
-        );
+        this.endedTurns.delete(params.turnId);
+        this.finishTurn(params.turnId, completedText);
       }
     } else if (method === "turn/ended") {
       // Server-authored outcome the live tail never carried (unqueued, host
       // death). Ignored when turn/completed already finished this turn.
+      // Still recorded: the ack may land after the end (see sendText).
+      const endedText = `turn ${params.turnId} ${params.terminal ?? params.outcome}`;
+      this.endedTurns.set(params.turnId, endedText);
       if (params.turnId === this.runningTurnId) {
-        this.finishTurn(params.turnId, `turn ${params.turnId} ${params.terminal ?? params.outcome}`);
+        this.endedTurns.delete(params.turnId);
+        this.finishTurn(params.turnId, endedText);
       }
     } else if (method === "approval/failed") {
       this.pushTerm(`approval ${params.approvalId} failed: ${params.kind}`);
@@ -330,6 +338,7 @@ export class ChatStore {
     this.items.clear();
     this.pendingApprovals.clear();
     this.pendingInputs.clear();
+    this.endedTurns.clear();
     this.seenItems.clear();
     this.watchSession();
   }
@@ -372,10 +381,20 @@ export class ChatStore {
         this.sink,
       )) as { turnId: string };
       this.runningTurnId = ack.turnId;
+      const terminal = this.endedTurns.get(ack.turnId);
+      if (terminal !== undefined) {
+        // The turn ended before its ack arrived: fold the outcome now
+        // instead of adopting a dead id (the composer would wedge).
+        this.endedTurns.delete(ack.turnId);
+        this.finishTurn(ack.turnId, terminal);
+      } else if (this.stopping) {
+        // Stop arrived mid-send with no id to cancel: re-issue it now.
+        void this.stopTurn();
+      }
       return true;
     } catch (err) {
       this.pushError("Could not send: " + (err as Error).message);
-      return true;
+      return false;
     } finally {
       this.sending = false;
     }

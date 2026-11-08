@@ -138,6 +138,17 @@ describe("POST /api/evaluate", () => {
     });
   });
 
+  it("rejects box questions the client cannot send", async () => {
+    await withServer(async (base) => {
+      const { status } = await post(base, {
+        state: "hi",
+        questions: { area: { type: "box", instructions: "point at it" } },
+      });
+      assert.equal(status, 400);
+      assert.equal(seen.length, 0);
+    });
+  });
+
   it("reports a missing key as json, not a crash", async () => {
     delete process.env.TYPESAFE_API_KEY;
     await withServer(async (base) => {
