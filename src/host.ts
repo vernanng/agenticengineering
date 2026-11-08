@@ -38,6 +38,9 @@ export async function startHost(): Promise<Host> {
   console.log("MSP ready:", JSON.stringify(msp.initializeResult.serverInfo));
   if (msp.fingerprintWarning) console.warn("fingerprint warning:", msp.fingerprintWarning.message);
 
+  // shortcut: sessions are never closed or evicted, so this map only grows. Fine for one
+  // local user (tens of sessions); the SDK has no per-session close, only client.close().
+  // Upgrade to a cap plus a close endpoint when many sessions become normal.
   const sessions = new Map<string, Session>();
   const approvals = new Map<string, { sessionId: string; resolve: (d: ApprovalDecisionInput) => void }>();
   const subscribers = new Set<(event: string, data: unknown) => void>();
@@ -130,6 +133,7 @@ export async function startHost(): Promise<Host> {
     },
 
     decideApproval(sessionId: string, approvalId: string, choiceId: string) {
+      needSession(sessionId); // unknown session is 404, before the approval check below
       const waiter = approvals.get(approvalId);
       if (!waiter || waiter.sessionId !== sessionId) {
         throw new UnknownApprovalError(`approval ${approvalId} is not pending`);

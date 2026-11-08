@@ -39,7 +39,17 @@
   let nextId = 0;
 
   const items = new Map<string, number>(); // itemId -> entry id
+  const entryById = new Map<number, Entry>(); // entry id -> entry, skips the full-list scan
   const seenItems = new Set<string>();
+
+  function pushEntry(e: Entry) {
+    entries.push(e);
+    entryById.set(e.id, e);
+  }
+
+  function slotById(id: number | undefined): Entry | undefined {
+    return id === undefined ? undefined : entryById.get(id);
+  }
   const pendingApprovals = new Set<string>();
   const pendingInputs = new Set<string>();
   let es: EventSource | null = null;
@@ -63,12 +73,12 @@
   }
 
   function pushTerm(text: string) {
-    entries.push({ type: "term", id: nextId++, text });
+    pushEntry({ type: "term", id: nextId++, text });
     scroll();
   }
 
   function pushError(text: string) {
-    entries.push({ type: "msg", id: nextId++, kind: "error", text, cls: "", streaming: false });
+    pushEntry({ type: "msg", id: nextId++, kind: "error", text, cls: "", streaming: false });
     scroll();
   }
 
@@ -81,7 +91,7 @@
           seenItems.add(it.itemId);
         }
         const kind = it?.kind || "message";
-        entries.push({
+        pushEntry({
           type: "msg",
           id: nextId++,
           kind,
@@ -109,7 +119,7 @@
       const id = params.itemId ?? params.item?.itemId;
       const slotId = id != null ? items.get(id) : undefined;
       if (slotId !== undefined) {
-        const slot = entries.find((e) => e.id === slotId);
+        const slot = slotById(slotId);
         if (slot?.type === "msg") slot.streaming = true;
       } else {
         const entry: Entry = {
@@ -120,13 +130,13 @@
           cls: "",
           streaming: true,
         };
-        entries.push(entry);
+        pushEntry(entry);
         if (id != null) items.set(id, entry.id);
       }
     } else if (method === "item/delta") {
       const slotId = items.get(params.itemId);
       if (slotId !== undefined) {
-        const slot = entries.find((e) => e.id === slotId);
+        const slot = slotById(slotId);
         if (slot?.type === "msg") {
           slot.text += params.delta ?? "";
           scroll();
@@ -137,13 +147,13 @@
       const slotId = id != null ? items.get(id) : undefined;
       const text = params.item ? itemText(params.item) : "";
       if (slotId !== undefined) {
-        const slot = entries.find((e) => e.id === slotId);
+        const slot = slotById(slotId);
         if (slot?.type === "msg") {
           slot.text = text || slot.text;
           slot.streaming = false;
         }
       } else {
-        entries.push({
+        pushEntry({
           type: "msg",
           id: nextId++,
           kind: params.item?.kind ?? "item",
@@ -173,7 +183,7 @@
     } else if (method === "approval/requested") {
       if (!params || pendingApprovals.has(params.approvalId)) return;
       pendingApprovals.add(params.approvalId);
-      entries.push({ type: "approval", id: nextId++, request: params as ApprovalRequest, resolved: false });
+      pushEntry({ type: "approval", id: nextId++, request: params as ApprovalRequest, resolved: false });
       scroll();
     } else if (method === "approval/resolved") {
       const entry = entries.find(
@@ -190,7 +200,7 @@
     } else if (method === "userInput/requested") {
       if (!params || pendingInputs.has(params.userInputId)) return;
       pendingInputs.add(params.userInputId);
-      entries.push({ type: "userinput", id: nextId++, request: params as UserInputRequest, settled: false });
+      pushEntry({ type: "userinput", id: nextId++, request: params as UserInputRequest, settled: false });
       scroll();
     } else if (method === "userInput/settled") {
       const entry = entries.find(
@@ -212,13 +222,13 @@
     for (const a of snap.approvals ?? []) {
       if (a && !pendingApprovals.has(a.approvalId)) {
         pendingApprovals.add(a.approvalId);
-        entries.push({ type: "approval", id: nextId++, request: a, resolved: false });
+        pushEntry({ type: "approval", id: nextId++, request: a, resolved: false });
       }
     }
     for (const u of snap.userInputs ?? []) {
       if (u && !pendingInputs.has(u.userInputId)) {
         pendingInputs.add(u.userInputId);
-        entries.push({ type: "userinput", id: nextId++, request: u, settled: false });
+        pushEntry({ type: "userinput", id: nextId++, request: u, settled: false });
       }
     }
     scroll();
@@ -248,6 +258,7 @@
     runningTurnId = null;
     stopping = false;
     entries = [];
+    entryById.clear();
     items.clear();
     pendingApprovals.clear();
     pendingInputs.clear();
@@ -260,8 +271,9 @@
       sessionId: string;
       fingerprintWarning?: string;
     };
-    const catalog = (await api("/api/profiles", undefined, sink)) as { profiles?: Profile[] };
+    const catalog = (await api("/api/profiles", undefined, sink)) as { profiles?: Profile[]; error?: string };
     profiles = (catalog.profiles ?? []).filter((p) => p.available);
+    if (catalog.error) pushTerm("Could not load permission profiles: " + catalog.error);
     sessionId = status.sessionId;
     if (status.fingerprintWarning) fingerprintWarning = "Host protocol differs from this SDK: " + status.fingerprintWarning;
     const resumed = (await api(
@@ -273,12 +285,15 @@
     watchSession();
   }
 
+  let sending = false;
+
   async function send(e: SubmitEvent) {
     e.preventDefault();
     const text = composerText.trim();
-    if (!text || runningTurnId) return;
+    if (!text || runningTurnId || sending) return;
     composerText = "";
-    entries.push({ type: "msg", id: nextId++, kind: "you", text, cls: "user", streaming: false });
+    sending = true;
+    pushEntry({ type: "msg", id: nextId++, kind: "you", text, cls: "user", streaming: false });
     scroll();
     try {
       const ack = (await api(
@@ -293,6 +308,8 @@
       runningTurnId = ack.turnId;
     } catch (err) {
       pushError("Could not send: " + (err as Error).message);
+    } finally {
+      sending = false;
     }
   }
 

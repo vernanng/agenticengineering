@@ -13,5 +13,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   throw new Error("PORT in .env must be a port number (1-65535).");
 }
 export const museBin = required("museBin");
+if (!fs.existsSync(museBin)) throw new Error(`museBin in .env does not exist: ${museBin}`);
 export const workspaceRoot = required("workspaceRoot");
-if (!fs.existsSync(workspaceRoot)) throw new Error(`workspaceRoot in .env does not exist: ${workspaceRoot}`);
+const rootStat = fs.statSync(workspaceRoot, { throwIfNoEntry: false });
+if (!rootStat?.isDirectory()) throw new Error(`workspaceRoot in .env is not a folder: ${workspaceRoot}`);

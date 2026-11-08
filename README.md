@@ -5,6 +5,11 @@ The server is the hub: `POST /api/turn` starts a turn, `/events` streams the
 answer back over SSE, `POST /api/turn/cancel` stops it. Config comes only
 from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 
+## Setup
+
+- `npm install` — installs root and `client/` deps.
+- Copy `.env.example` to `.env` and set `PORT`, `museBin`, `workspaceRoot`.
+
 ## Commands
 
 - `npm run dev` — start the project (watch mode).
@@ -15,4 +20,4 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 
 - `src/` — application source (`index.ts`, `config.ts`, `host.ts`, `server.ts`).
 - `test/` — automated tests.
-- `public/` — browser chat client.
+- `client/` — browser chat client (built to `client/dist`, served by the hub).

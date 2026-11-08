@@ -47,16 +47,19 @@ function validAnswers(body: unknown): body is { userInputId: string; answers: Us
   if (!body || typeof body !== "object") return false;
   const { userInputId, answers } = body as Record<string, unknown>;
   if (typeof userInputId !== "string" || !Array.isArray(answers) || answers.length === 0) return false;
-  return answers.every(
-    (a) =>
-      !!a &&
-      typeof a === "object" &&
-      typeof (a as Record<string, unknown>).questionId === "string" &&
+  return answers.every((a) => {
+    if (!a || typeof a !== "object") return false;
+    const q = a as Record<string, unknown>;
+    if (typeof q.questionId !== "string" || q.questionId.length === 0) return false;
+    return (
       (["selectedLabel", "selectedLabels", "freeText"] as const).filter((k) => {
-        const v = (a as Record<string, unknown>)[k];
-        return k === "selectedLabels" ? Array.isArray(v) && v.length > 0 : typeof v === "string" && v.length > 0;
-      }).length === 1,
-  );
+        const v = q[k];
+        if (k === "selectedLabels")
+          return Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === "string" && s.length > 0);
+        return typeof v === "string" && v.length > 0;
+      }).length === 1
+    );
+  });
 }
 
 const sessionBody = {
@@ -136,7 +139,16 @@ export function createServer(host: Host): FastifyInstance {
     };
     send("ready", { sessionId });
     send("snapshot", snap);
-    const off = host.onEvent(send);
+    // One tab wants one session: drop other sessions here instead of making
+    // every tab filter the full fan-out. Events without a session still pass.
+    const off = host.onEvent((event, data) => {
+      if (event !== "msp") {
+        send(event, data);
+        return;
+      }
+      const sid = (data as { params?: { sessionId?: unknown } } | null)?.params?.sessionId;
+      if (sid === undefined || sid === sessionId) send(event, data);
+    });
     const heartbeat = setInterval(() => res.write(": ping\n\n"), 25000);
     req.raw.on("close", () => {
       clearInterval(heartbeat);
@@ -155,7 +167,7 @@ export function createServer(host: Host): FastifyInstance {
       return await host.listProfiles();
     } catch (e) {
       console.error("profiles:", e);
-      return { profiles: [] };
+      return { profiles: [], error: String(e).slice(0, 300) };
     }
   });
 
@@ -216,6 +228,9 @@ export function createServer(host: Host): FastifyInstance {
   // Static frontend. Unmatched methods and paths land here, as before.
   app.all("/*", async (req, reply) => {
     const url = new URL(req.raw.url ?? "/", "http://localhost");
+    if (url.pathname.startsWith("/api/")) {
+      return reply.code(404).send({ error: "not found" });
+    }
     const file = url.pathname === "/" ? "/index.html" : url.pathname;
     const target = path.normalize(path.join(PUBLIC, file));
     if (!target.startsWith(PUBLIC + path.sep)) {

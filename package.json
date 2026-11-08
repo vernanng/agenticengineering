@@ -4,6 +4,7 @@
   "module": "src/index.ts",
   "type": "module",
   "scripts": {
+    "postinstall": "npm --prefix client install",
     "dev": "node --watch --env-file=.env src/index.ts",
     "dev:bun": "bun --watch run src/index.ts",
     "dev:client": "npm --prefix client run dev",

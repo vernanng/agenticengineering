@@ -5,11 +5,17 @@ import { createServer, UnknownApprovalError, UnknownSessionError } from "../src/
 
 function fakeHost() {
   const calls: unknown[][] = [];
+  const subs = new Set<(event: string, data: unknown) => void>();
   const host = {
     defaultSessionId: "sess-1",
     serverInfo: { name: "test" },
     fingerprintWarning: undefined,
-    onEvent: () => () => {},
+    onEvent: (sub: (event: string, data: unknown) => void) => {
+      subs.add(sub);
+      return () => {
+        subs.delete(sub);
+      };
+    },
     startSession: async () => "sess-2",
     sendTurn: async (sessionId: string, text: string) => {
       calls.push(["sendTurn", sessionId, text]);
@@ -40,7 +46,10 @@ function fakeHost() {
     listProfiles: async () => ({ profiles: [] }),
     close: async () => {},
   };
-  return { calls, host };
+  const fire = (event: string, data: unknown) => {
+    for (const sub of subs) sub(event, data);
+  };
+  return { calls, host, fire };
 }
 
 async function withServer(host: Parameters<typeof createServer>[0], fn: (base: string) => Promise<void>) {
@@ -124,6 +133,52 @@ describe("hub routes", () => {
       assert.deepEqual(await res.json(), {
         history: { mode: "inline", items: [{ itemId: "i1", kind: "userMessage", text: "hi" }] },
       });
+    });
+  });
+
+  it("answers unknown api paths with json, not text", async () => {
+    const { host } = fakeHost();
+    await withServer(host, async (base) => {
+      const res = await fetch(`${base}/api/nope`);
+      assert.equal(res.status, 404);
+      assert.deepEqual(await res.json(), { error: "not found" });
+    });
+  });
+
+  it("rejects answers that set two fields or miss the question", async () => {
+    const { host } = fakeHost();
+    await withServer(host, async (base) => {
+      const bad = (answers: unknown) => post(base, "/api/user-input", { sessionId: "sess-1", userInputId: "q1", answers });
+      assert.equal((await bad([{ questionId: "a", selectedLabel: "X", freeText: "Y" }])).status, 400);
+      assert.equal((await bad([{ questionId: "", selectedLabel: "X" }])).status, 400);
+      assert.equal((await bad([{ questionId: "a", selectedLabels: ["X", 7] }])).status, 400);
+    });
+  });
+
+  it("only streams events for the connected session", async () => {
+    const { host, fire } = fakeHost();
+    await withServer(host, async (base) => {
+      const seen = await new Promise<string>((resolve, reject) => {
+        let buf = "";
+        let fired = false;
+        const req = http.get(`${base}/events?sessionId=sess-1`, { headers: { Accept: "text/event-stream" } }, (res) => {
+          res.on("data", (chunk: Buffer) => {
+            buf += chunk.toString();
+            if (!fired && buf.includes("event: snapshot")) {
+              fired = true;
+              fire("msp", { method: "item/started", params: { sessionId: "other", itemId: "x" } });
+              fire("msp", { method: "turn/started", params: { sessionId: "sess-1", turnId: "t9" } });
+            }
+          });
+        });
+        req.on("error", reject);
+        setTimeout(() => {
+          req.destroy();
+          resolve(buf);
+        }, 400);
+      });
+      assert.match(seen, /t9/);
+      assert.doesNotMatch(seen, /"itemId":"x"/);
     });
   });
 
