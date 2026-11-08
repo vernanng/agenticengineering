@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Debug server",
+    "adapter": "JavaScript",
+    "request": "launch",
+    "program": "${workspaceFolder}/server/src/index.ts",
+    "cwd": "${workspaceFolder}/server",
+    "envFile": "${workspaceFolder}/.env"
+  }
+]

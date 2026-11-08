@@ -1,0 +1,14 @@
+[
+  {
+    "label": "dev",
+    "command": "npm run dev"
+  },
+  {
+    "label": "start",
+    "command": "npm start"
+  },
+  {
+    "label": "test",
+    "command": "npm test"
+  }
+]
