@@ -58,7 +58,7 @@
   {#if request.rawArgs}
     <details>
       <summary>Technical details</summary>
-      <pre style="font-size:12px;overflow:auto;max-height:120px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px;">{request.rawArgs}</pre>
+      <pre style="font-size:12px;overflow:auto;max-height:120px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px;">{request.rawArgs}</pre>
     </details>
   {/if}
   <div class="choices">

@@ -122,11 +122,11 @@
         value={custom[q.id] ?? ""}
         oninput={(e) => (custom[q.id] = (e.target as HTMLInputElement).value)}
         disabled={disabled}
-        style="margin-top:4px;width:100%;font-size:13px;padding:6px;border:1px solid var(--line);border-radius:6px;"
+        style="margin-top:4px;width:100%;font-size:13px;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);"
       />
     </div>
   {/each}
-  <div style="font-size:12px;color:#8a6d00;margin-top:6px;">{hint}</div>
+  <div style="font-size:12px;color:var(--warn-ink);margin-top:6px;">{hint}</div>
   <div class="choices">
     <button class="ghost" disabled={disabled} onclick={answer}>Answer</button>
   </div>

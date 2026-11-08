@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { ChatStore } from "../lib/chat.svelte";
+  import { navigate, route } from "../lib/router.svelte";
+  import SettingsMenu from "./SettingsMenu.svelte";
 
   let { chat }: { chat: ChatStore } = $props();
 </script>
@@ -23,21 +25,12 @@
     <span class="sess" title={chat.sessionId ?? ""}>{chat.sessionId ?? "connecting…"}</span>
   </div>
   <div class="topactions">
-    <label class="visually-hidden" for="profile">Permission profile</label>
-    <select
-      id="profile"
-      bind:value={chat.selectedProfile}
-      onchange={() => chat.newSession()}
-      title="Permission profile for new chats"
-    >
-      <option value="">Host default</option>
-      {#each chat.profiles as p}
-        <option value={p.profileId} title={p.description ?? ""}>{p.label}</option>
-      {/each}
-    </select>
-    <button class="ghost" onclick={() => (chat.trafficHidden = !chat.trafficHidden)} aria-expanded={!chat.trafficHidden}>
-      {chat.trafficHidden ? "Show traffic" : "Hide traffic"}
-    </button>
+    {#if route.path === "/hello"}
+      <button class="ghost" onclick={() => navigate("/")}>Dashboard</button>
+    {:else}
+      <button class="ghost" onclick={() => navigate("/hello")}>LWC demo</button>
+    {/if}
+    <SettingsMenu chat={chat} />
     <button class="ghost" onclick={() => chat.newSession()}>New chat</button>
   </div>
 </header>

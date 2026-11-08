@@ -7,7 +7,7 @@ function current(): Route {
   return window.location.pathname === "/hello" ? "/hello" : "/";
 }
 
-export const route = $state<Route>(current());
+export const route = $state<{ path: Route }>({ path: current() });
 
 export function navigate(to: Route) {
   history.pushState(null, "", to);
