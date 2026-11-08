@@ -1,4 +1,5 @@
-import { api, itemText, type TrafficSink } from "./api";
+import { api, itemText, type TrafficSink } from "./api.ts";
+import { approveOnceChoice, judgeApproval } from "./safety";
 import type { ApprovalRequest } from "../components/ApprovalCard.svelte";
 import type { UserInputRequest } from "../components/UserInputCard.svelte";
 
@@ -17,10 +18,15 @@ export interface TrafficLine {
   title: string;
 }
 
+export type ApprovalVerdict =
+  | { state: "checking" }
+  | { state: "safe"; noul: number }
+  | { state: "manual"; noul?: number };
+
 export type Entry =
   | { type: "msg"; id: number; kind: string; text: string; cls: string; streaming: boolean }
   | { type: "term"; id: number; text: string }
-  | { type: "approval"; id: number; request: ApprovalRequest; resolved: boolean }
+  | { type: "approval"; id: number; request: ApprovalRequest; resolved: boolean; verdict?: ApprovalVerdict }
   | { type: "userinput"; id: number; request: UserInputRequest; settled: boolean };
 
 export function scrollToId(id: string) {
@@ -209,9 +215,8 @@ export class ChatStore {
     } else if (method === "approval/failed") {
       this.pushTerm(`approval ${params.approvalId} failed: ${params.kind}`);
     } else if (method === "approval/requested") {
-      if (!params || this.pendingApprovals.has(params.approvalId)) return;
-      this.pendingApprovals.add(params.approvalId);
-      this.pushEntry({ type: "approval", id: this.nextId++, request: params as ApprovalRequest, resolved: false });
+      if (!params) return;
+      this.addApproval(params as ApprovalRequest);
       this.scroll();
     } else if (method === "approval/resolved") {
       const entry = this.entries.find(
@@ -224,6 +229,7 @@ export class ChatStore {
       );
       if (entry?.type === "approval" && Array.isArray(params.availableChoices)) {
         entry.request = params as ApprovalRequest;
+        void this.tryAutoApprove(entry.id);
       }
     } else if (method === "userInput/requested") {
       if (!params || this.pendingInputs.has(params.userInputId)) return;
@@ -248,10 +254,7 @@ export class ChatStore {
     if (!snap || snap.sessionId !== this.sessionId) return;
     this.renderHistory({ mode: "inline", items: snap.items ?? [] });
     for (const a of snap.approvals ?? []) {
-      if (a && !this.pendingApprovals.has(a.approvalId)) {
-        this.pendingApprovals.add(a.approvalId);
-        this.pushEntry({ type: "approval", id: this.nextId++, request: a, resolved: false });
-      }
+      if (a) this.addApproval(a);
     }
     for (const u of snap.userInputs ?? []) {
       if (u && !this.pendingInputs.has(u.userInputId)) {
@@ -365,6 +368,72 @@ export class ChatStore {
   settleUserInput(entry: Entry, userInputId: string) {
     if (entry?.type === "userinput") entry.settled = true;
     this.pendingInputs.delete(userInputId);
+  }
+
+  // One parked approval: show its card, then let Jev vote. A clear safe vote
+  // auto-approves the one-shot grant; anything else stays a human decision.
+  // Approval entries are always touched through this lookup: only reads via
+  // the proxied entries array notify the UI; the raw object kept in
+  // entryById does not.
+  lookupApproval(id: number): Extract<Entry, { type: "approval" }> | undefined {
+    const e = this.entries.find((x) => x.id === id);
+    return e?.type === "approval" ? e : undefined;
+  }
+
+  addApproval(request: ApprovalRequest) {
+    if (!request || this.pendingApprovals.has(request.approvalId)) return;
+    this.pendingApprovals.add(request.approvalId);
+    const id = this.nextId++;
+    this.pushEntry({ type: "approval", id, request, resolved: false });
+    void this.judgeEntry(id);
+  }
+
+  async judgeEntry(id: number) {
+    const entry = this.lookupApproval(id);
+    if (!entry) return;
+    entry.verdict = { state: "checking" };
+    const v = await judgeApproval(entry.request, this.sink);
+    const live = this.lookupApproval(id);
+    if (!live || live.resolved) return;
+    if (!v || !v.safe) {
+      live.verdict = { state: "manual", noul: v?.noul };
+      return;
+    }
+    live.verdict = { state: "safe", noul: v.noul };
+    await this.tryAutoApprove(id);
+  }
+
+  async tryAutoApprove(id: number) {
+    const entry = this.lookupApproval(id);
+    const verdict = entry?.verdict;
+    if (!entry || entry.resolved || verdict?.state !== "safe") return;
+    const choices = entry.request.availableChoices ?? [];
+    const choice = approveOnceChoice(choices);
+    if (!choice) {
+      // No narrow grant offered (or choices not in yet): a safe vote alone
+      // never approves. Wait for choices; fall back to manual once they land.
+      if (choices.length > 0) entry.verdict = { state: "manual", noul: verdict.noul };
+      return;
+    }
+    try {
+      await api(
+        "/api/approval",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: this.sessionId,
+            approvalId: entry.request.approvalId,
+            choiceId: choice.choiceId,
+          }),
+        },
+        this.sink,
+      );
+      this.pushTerm(`Jev auto-approved ${approvalTitle(entry.request)} (safe ${verdict.noul}).`);
+    } catch (e) {
+      entry.verdict = { state: "manual", noul: verdict.noul };
+      this.pushError("Jev auto-approve failed, your call: " + (e as Error).message);
+    }
   }
 
   destroy() {

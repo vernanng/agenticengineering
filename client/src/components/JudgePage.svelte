@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ChatStore } from "../lib/chat.svelte";
-  import { evaluate } from "../lib/api";
+  import { evaluate } from "../lib/api.ts";
   import { navigate } from "../lib/router.svelte";
 
   let { chat }: { chat: ChatStore } = $props();
@@ -224,9 +224,6 @@
     width: auto;
   }
   .qrow .wide {
-    flex: 1 1 100%;
-  }
-  .qrow .queue {
     flex: 1 1 100%;
   }
 </style>

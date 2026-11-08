@@ -243,6 +243,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   max-width: 76ch;
 }
 .approval .choices { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.approval .verdict { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .approval .decided { margin-top: 8px; font-size: 12px; color: var(--warn-ink); }
 .approval details { margin-top: 8px; }
 .approval summary { font-size: 12px; color: var(--warn-ink); cursor: pointer; }

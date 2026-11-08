@@ -37,6 +37,7 @@
           request={e.request}
           sessionId={chat.sessionId}
           resolved={e.resolved}
+          verdict={e.verdict}
           sink={chat.sink}
           onDecided={(text) => chat.pushTerm(text)}
           onError={(text) => chat.pushError(text)}
