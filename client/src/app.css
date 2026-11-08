@@ -114,6 +114,9 @@ button:disabled { opacity: 0.5; cursor: default; }
   align-items: start;
 }
 .side, .inspector { display: grid; gap: 12px; align-content: start; position: sticky; top: 72px; }
+/* Shape variants (see src/shape.ts): focus drops the side panel, single is chat only. */
+.shell[data-layout="focus"] { grid-template-columns: minmax(0, 1fr) 340px; }
+.shell[data-layout="single"] { grid-template-columns: minmax(0, 1fr); max-width: 900px; }
 .side nav { display: flex; flex-wrap: wrap; gap: 6px; }
 .navlink {
   background: var(--surface);

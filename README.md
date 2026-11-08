@@ -21,3 +21,6 @@ from `.env` (`PORT`, `museBin`, `workspaceRoot`); nothing is defaulted.
 - `server/src/` — application source (`index.ts`, `config.ts`, `host.ts`, `server.ts`).
 - `server/test/` — automated tests.
 - `client/` — browser chat client (built to `client/dist`, served by the hub).
+  Reshape it via `client/src/shape.ts` (`layout`, `showStats`, `showTraffic`);
+  panels are one component tag each in `client/src/App.svelte`, state lives in
+  `client/src/lib/chat.svelte.ts`.

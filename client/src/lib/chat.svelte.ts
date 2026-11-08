@@ -1,0 +1,376 @@
+import { api, itemText, type TrafficSink } from "./api";
+import type { ApprovalRequest } from "../components/ApprovalCard.svelte";
+import type { UserInputRequest } from "../components/UserInputCard.svelte";
+
+export interface Profile {
+  profileId: string;
+  label: string;
+  description?: string;
+  available?: boolean;
+}
+
+export interface TrafficLine {
+  id: number;
+  dir: "in" | "out";
+  label: string;
+  text: string | null;
+  title: string;
+}
+
+export type Entry =
+  | { type: "msg"; id: number; kind: string; text: string; cls: string; streaming: boolean }
+  | { type: "term"; id: number; text: string }
+  | { type: "approval"; id: number; request: ApprovalRequest; resolved: boolean }
+  | { type: "userinput"; id: number; request: UserInputRequest; settled: boolean };
+
+export function scrollToId(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+export function approvalTitle(r: ApprovalRequest): string {
+  return r.subject?.title ?? r.toolCallId ?? r.subject?.kind ?? "tool call";
+}
+
+// Single owner of chat state + server wiring. Panels stay presentational:
+// to move a panel, move its one component tag in App.svelte.
+export class ChatStore {
+  entries = $state<Entry[]>([]);
+  traffic = $state<TrafficLine[]>([]);
+  trafficHidden = $state(false);
+  sessionId = $state<string | null>(null);
+  runningTurnId = $state<string | null>(null);
+  stopping = $state(false);
+  profiles = $state<Profile[]>([]);
+  selectedProfile = $state("");
+  fingerprintWarning = $state("");
+  bootError = $state<string | null>(null);
+
+  nextId = 0;
+  items = new Map<string, number>(); // itemId -> entry id
+  entryById = new Map<number, Entry>(); // entry id -> entry, skips the full-list scan
+  seenItems = new Set<string>();
+  pendingApprovals = new Set<string>();
+  pendingInputs = new Set<string>();
+  es: EventSource | null = null;
+  sending = false;
+
+  get pendingApprovalEntries() {
+    return this.entries.filter((e) => e.type === "approval" && !e.resolved);
+  }
+  get pendingInputEntries() {
+    return this.entries.filter((e) => e.type === "userinput" && !e.settled);
+  }
+  get messageCount() {
+    return this.entries.filter((e) => e.type === "msg").length;
+  }
+  get turnCount() {
+    return this.entries.filter((e) => e.type === "term" && e.text.startsWith("turn ")).length;
+  }
+  get errorCount() {
+    return this.entries.filter((e) => e.type === "msg" && e.kind === "error").length;
+  }
+  get connection() {
+    return this.bootError ? "offline" : this.sessionId ? "live" : "starting";
+  }
+
+  sink: TrafficSink = (dir, label, data) => {
+    const json = data === null || data === undefined ? null : JSON.stringify(data);
+    this.traffic = [
+      {
+        id: this.nextId++,
+        dir,
+        label,
+        text: json === null ? null : json.length > 1200 ? json.slice(0, 1200) + "…" : json,
+        title: json ?? "",
+      },
+      ...this.traffic,
+    ].slice(0, 80);
+  };
+
+  scroll() {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  pushEntry(e: Entry) {
+    this.entries.push(e);
+    this.entryById.set(e.id, e);
+  }
+
+  slotById(id: number | undefined): Entry | undefined {
+    return id === undefined ? undefined : this.entryById.get(id);
+  }
+
+  pushTerm(text: string) {
+    this.pushEntry({ type: "term", id: this.nextId++, text });
+    this.scroll();
+  }
+
+  pushError(text: string) {
+    this.pushEntry({ type: "msg", id: this.nextId++, kind: "error", text, cls: "", streaming: false });
+    this.scroll();
+  }
+
+  renderHistory(history: { mode?: string; items?: unknown[] }) {
+    if (history && history.mode === "inline" && Array.isArray(history.items)) {
+      for (const item of history.items) {
+        const it = item as { itemId?: string; kind?: string };
+        if (typeof it?.itemId === "string") {
+          if (this.seenItems.has(it.itemId)) continue;
+          this.seenItems.add(it.itemId);
+        }
+        const kind = it?.kind || "message";
+        this.pushEntry({
+          type: "msg",
+          id: this.nextId++,
+          kind,
+          text: itemText(item),
+          cls: kind === "userMessage" ? "user" : "",
+          streaming: false,
+        });
+      }
+      this.scroll();
+    }
+  }
+
+  finishTurn(turnId: string, text: string) {
+    this.pushTerm(text);
+    if (turnId === this.runningTurnId) {
+      this.runningTurnId = null;
+      this.stopping = false;
+    }
+  }
+
+  route(method: string, params: Record<string, any>) {
+    this.sink("in", method, params);
+    if (!params || params.sessionId !== this.sessionId) return;
+    if (method === "item/started") {
+      const id = params.itemId ?? params.item?.itemId;
+      const slotId = id != null ? this.items.get(id) : undefined;
+      if (slotId !== undefined) {
+        const slot = this.slotById(slotId);
+        if (slot?.type === "msg") slot.streaming = true;
+      } else {
+        const entry: Entry = {
+          type: "msg",
+          id: this.nextId++,
+          kind: params.item?.kind ?? "item",
+          text: "",
+          cls: "",
+          streaming: true,
+        };
+        this.pushEntry(entry);
+        if (id != null) this.items.set(id, entry.id);
+      }
+    } else if (method === "item/delta") {
+      const slotId = this.items.get(params.itemId);
+      if (slotId !== undefined) {
+        const slot = this.slotById(slotId);
+        if (slot?.type === "msg") {
+          slot.text += params.delta ?? "";
+          this.scroll();
+        }
+      }
+    } else if (method === "item/completed") {
+      const id = params.itemId ?? params.item?.itemId;
+      const slotId = id != null ? this.items.get(id) : undefined;
+      const text = params.item ? itemText(params.item) : "";
+      if (slotId !== undefined) {
+        const slot = this.slotById(slotId);
+        if (slot?.type === "msg") {
+          slot.text = text || slot.text;
+          slot.streaming = false;
+        }
+      } else {
+        this.pushEntry({
+          type: "msg",
+          id: this.nextId++,
+          kind: params.item?.kind ?? "item",
+          text,
+          cls: "",
+          streaming: false,
+        });
+      }
+      if (id != null) this.seenItems.add(id);
+      this.scroll();
+    } else if (method === "turn/started") {
+      this.runningTurnId = params.turnId;
+    } else if (method === "turn/completed") {
+      this.finishTurn(
+        params.turnId,
+        `turn ${params.turnId} ${params.terminal}` +
+          (params.error ? `: ${params.error.message ?? params.error.kind}` : ""),
+      );
+    } else if (method === "turn/ended") {
+      // Server-authored outcome the live tail never carried (unqueued, host
+      // death). Ignored when turn/completed already finished this turn.
+      if (params.turnId === this.runningTurnId) {
+        this.finishTurn(params.turnId, `turn ${params.turnId} ${params.terminal ?? params.outcome}`);
+      }
+    } else if (method === "approval/failed") {
+      this.pushTerm(`approval ${params.approvalId} failed: ${params.kind}`);
+    } else if (method === "approval/requested") {
+      if (!params || this.pendingApprovals.has(params.approvalId)) return;
+      this.pendingApprovals.add(params.approvalId);
+      this.pushEntry({ type: "approval", id: this.nextId++, request: params as ApprovalRequest, resolved: false });
+      this.scroll();
+    } else if (method === "approval/resolved") {
+      const entry = this.entries.find(
+        (e) => e.type === "approval" && e.request.approvalId === params.approvalId,
+      );
+      if (entry?.type === "approval") entry.resolved = true;
+    } else if (method === "approval/updated") {
+      const entry = this.entries.find(
+        (e) => e.type === "approval" && e.request.approvalId === params.approvalId,
+      );
+      if (entry?.type === "approval" && Array.isArray(params.availableChoices)) {
+        entry.request = params as ApprovalRequest;
+      }
+    } else if (method === "userInput/requested") {
+      if (!params || this.pendingInputs.has(params.userInputId)) return;
+      this.pendingInputs.add(params.userInputId);
+      this.pushEntry({ type: "userinput", id: this.nextId++, request: params as UserInputRequest, settled: false });
+      this.scroll();
+    } else if (method === "userInput/settled") {
+      const entry = this.entries.find(
+        (e) => e.type === "userinput" && e.request.userInputId === params.userInputId,
+      );
+      if (entry?.type === "userinput") entry.settled = true;
+      this.pendingInputs.delete(params.userInputId);
+    }
+  }
+
+  applySnapshot(snap: {
+    sessionId?: string;
+    items?: unknown[];
+    approvals?: ApprovalRequest[];
+    userInputs?: UserInputRequest[];
+  }) {
+    if (!snap || snap.sessionId !== this.sessionId) return;
+    this.renderHistory({ mode: "inline", items: snap.items ?? [] });
+    for (const a of snap.approvals ?? []) {
+      if (a && !this.pendingApprovals.has(a.approvalId)) {
+        this.pendingApprovals.add(a.approvalId);
+        this.pushEntry({ type: "approval", id: this.nextId++, request: a, resolved: false });
+      }
+    }
+    for (const u of snap.userInputs ?? []) {
+      if (u && !this.pendingInputs.has(u.userInputId)) {
+        this.pendingInputs.add(u.userInputId);
+        this.pushEntry({ type: "userinput", id: this.nextId++, request: u, settled: false });
+      }
+    }
+    this.scroll();
+  }
+
+  watchSession() {
+    if (this.es) this.es.close();
+    this.es = new EventSource("/events?sessionId=" + encodeURIComponent(this.sessionId ?? ""));
+    this.es.addEventListener("msp", (e) => {
+      const { method, params } = JSON.parse((e as MessageEvent).data);
+      this.route(method, params);
+    });
+    this.es.addEventListener("snapshot", (e) =>
+      this.applySnapshot(JSON.parse((e as MessageEvent).data)),
+    );
+  }
+
+  async newSession() {
+    const s = (await api(
+      "/api/session",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: this.selectedProfile ? this.selectedProfile : null }),
+      },
+      this.sink,
+    )) as { sessionId: string };
+    this.sessionId = s.sessionId;
+    this.runningTurnId = null;
+    this.stopping = false;
+    this.entries = [];
+    this.entryById.clear();
+    this.items.clear();
+    this.pendingApprovals.clear();
+    this.pendingInputs.clear();
+    this.seenItems.clear();
+    this.watchSession();
+  }
+
+  async init() {
+    const status = (await api("/api/status", undefined, this.sink)) as {
+      sessionId: string;
+      fingerprintWarning?: string;
+    };
+    const catalog = (await api("/api/profiles", undefined, this.sink)) as {
+      profiles?: Profile[];
+      error?: string;
+    };
+    this.profiles = (catalog.profiles ?? []).filter((p) => p.available);
+    if (catalog.error) this.pushTerm("Could not load permission profiles: " + catalog.error);
+    this.sessionId = status.sessionId;
+    if (status.fingerprintWarning)
+      this.fingerprintWarning = "Host protocol differs from this SDK: " + status.fingerprintWarning;
+    const resumed = (await api(
+      "/api/history?sessionId=" + encodeURIComponent(this.sessionId),
+      undefined,
+      this.sink,
+    )) as { history: { mode?: string; items?: unknown[] } };
+    this.renderHistory(resumed.history);
+    this.watchSession();
+  }
+
+  async sendText(raw: string) {
+    const text = raw.trim();
+    if (!text || this.runningTurnId || this.sending) return;
+    this.sending = true;
+    this.pushEntry({ type: "msg", id: this.nextId++, kind: "you", text, cls: "user", streaming: false });
+    this.scroll();
+    try {
+      const ack = (await api(
+        "/api/turn",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: this.sessionId, text }),
+        },
+        this.sink,
+      )) as { turnId: string };
+      this.runningTurnId = ack.turnId;
+    } catch (err) {
+      this.pushError("Could not send: " + (err as Error).message);
+    } finally {
+      this.sending = false;
+    }
+  }
+
+  async stopTurn() {
+    const turnId = this.runningTurnId;
+    this.stopping = true;
+    try {
+      await api(
+        "/api/turn/cancel",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: this.sessionId, turnId }),
+        },
+        this.sink,
+      );
+    } catch (err) {
+      this.stopping = false;
+      this.pushError("Could not stop the turn: " + (err as Error).message);
+    }
+  }
+
+  settleUserInput(entry: Entry, userInputId: string) {
+    if (entry?.type === "userinput") entry.settled = true;
+    this.pendingInputs.delete(userInputId);
+  }
+
+  destroy() {
+    this.es?.close();
+    this.es = null;
+  }
+}
+
+export const chat = new ChatStore();
