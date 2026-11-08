@@ -7,10 +7,11 @@
     "dev": "node --watch --env-file=.env src/index.ts",
     "dev:bun": "bun --watch run src/index.ts",
     "start": "node --env-file=.env src/index.ts",
-    "start:bun": "bun run src/index.ts"
+    "start:bun": "bun run src/index.ts",
+    "test": "node --test test/"
   },
   "dependencies": {
-    "@muse-code/sdk": "^1.4.14",
+    "@muse-code/sdk": "1.4.14",
     "@types/node": "^26.6.6"
   }
 }

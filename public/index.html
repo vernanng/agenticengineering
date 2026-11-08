@@ -60,7 +60,9 @@ const sessEl = document.getElementById("sess");
 let sessionId = null;
 let runningTurnId = null;
 const items = new Map(); // itemId -> element
-const approvals = new Map();
+const approvals = new Map(); // approvalId -> card
+const userInputs = new Map(); // userInputId -> card
+const seenItems = new Set(); // itemIds already rendered (history/snapshot/live)
 
 function addMsg(kind, text, cls = "") {
   const div = document.createElement("div");
@@ -134,6 +136,38 @@ async function newSession() {
   sessEl.textContent = sessionId;
   log.innerHTML = "";
   items.clear();
+  approvals.clear();
+  userInputs.clear();
+  seenItems.clear();
+  watchSession();
+}
+
+function renderHistory(history) {
+  if (history && history.mode === "inline" && Array.isArray(history.items)) {
+    for (const item of history.items) {
+      if (item && typeof item.itemId === "string") {
+        if (seenItems.has(item.itemId)) continue;
+        seenItems.add(item.itemId);
+      }
+      const kind = item.kind || "message";
+      addMsg(kind, itemText(item), kind === "userMessage" ? "user" : "");
+    }
+  }
+}
+
+let es = null;
+function watchSession() {
+  if (es) es.close();
+  es = new EventSource("/events?sessionId=" + encodeURIComponent(sessionId));
+  es.addEventListener("msp", (e) => route(JSON.parse(e.data)));
+  es.addEventListener("snapshot", (e) => applySnapshot(JSON.parse(e.data)));
+}
+
+function applySnapshot(snap) {
+  if (!snap || snap.sessionId !== sessionId) return;
+  renderHistory({ mode: "inline", items: snap.items ?? [] });
+  for (const a of snap.approvals ?? []) showApproval(a);
+  for (const u of snap.userInputs ?? []) showUserInput(u);
 }
 
 async function init() {
@@ -159,23 +193,22 @@ async function init() {
     document.getElementById("warn").textContent = "Host protocol differs from this SDK: " + status.fingerprintWarning;
   }
   const resumed = await api("/api/history?sessionId=" + encodeURIComponent(sessionId));
-  const history = resumed.history;
-  if (history && history.mode === "inline" && Array.isArray(history.items)) {
-    for (const item of history.items) {
-      const kind = item.kind || "message";
-      addMsg(kind, itemText(item), kind === "userMessage" ? "user" : "");
-    }
-  }
-  const es = new EventSource("/events");
-  es.addEventListener("msp", (e) => route(JSON.parse(e.data)));
+  renderHistory(resumed.history);
+  watchSession();
 }
 
 function route({ method, params }) {
   inspect("in", method, params);
   if (!params || params.sessionId !== sessionId) return;
   if (method === "item/started") {
-    const { div, body } = addMsg(params.item?.kind ?? "item", "", "streaming");
-    items.set(params.itemId ?? params.item?.itemId, { div, body, text: "" });
+    const id = params.itemId ?? params.item?.itemId;
+    const slot = id != null ? items.get(id) : undefined;
+    if (slot) {
+      slot.div.classList.add("streaming"); // snapshot already rendered it; resume streaming
+    } else {
+      const { div, body } = addMsg(params.item?.kind ?? "item", "", "streaming");
+      if (id != null) items.set(id, { div, body, text: "" });
+    }
   } else if (method === "item/delta") {
     const slot = items.get(params.itemId);
     if (slot) {
@@ -193,21 +226,25 @@ function route({ method, params }) {
     } else {
       addMsg(params.item?.kind ?? "item", text);
     }
+    if (id != null) seenItems.add(id);
   } else if (method === "turn/started") {
     runningTurnId = params.turnId;
     showCancel(params.turnId);
   } else if (method === "turn/completed") {
+    finishTurn(params.turnId, `turn ${params.turnId} ${params.terminal}` +
+      (params.error ? `: ${params.error.message ?? params.error.kind}` : ""));
+  } else if (method === "turn/ended") {
+    // Server-authored outcome the live tail never carried (unqueued, host
+    // death). Ignored when turn/completed already finished this turn.
+    if (params.turnId === runningTurnId) {
+      finishTurn(params.turnId, `turn ${params.turnId} ${params.terminal ?? params.outcome}`);
+    }
+  } else if (method === "approval/failed") {
     const t = document.createElement("div");
     t.className = "terminal";
-    t.textContent = `turn ${params.turnId} ${params.terminal}` +
-      (params.error ? `: ${params.error.message ?? params.error.kind}` : "");
+    t.textContent = `approval ${params.approvalId} failed: ${params.kind}`;
     log.appendChild(t);
-    if (params.turnId === runningTurnId) {
-      runningTurnId = null;
-      document.getElementById("send").disabled = false;
-      const c = document.getElementById("cancelrow");
-      if (c) c.remove();
-    }
+    window.scrollTo(0, document.body.scrollHeight);
   } else if (method === "approval/requested") {
     showApproval(params);
   } else if (method === "approval/resolved") {
@@ -215,7 +252,38 @@ function route({ method, params }) {
     if (card) {
       card.querySelectorAll("button").forEach((b) => (b.disabled = true));
     }
+  } else if (method === "approval/updated") {
+    const card = approvals.get(params.approvalId);
+    if (card && Array.isArray(params.availableChoices)) {
+      const row = card.querySelector(".choices");
+      if (row) {
+        row.replaceChildren();
+        addApprovalButtons(row, params);
+      }
+    }
+  } else if (method === "userInput/requested") {
+    showUserInput(params);
+  } else if (method === "userInput/settled") {
+    const card = userInputs.get(params.userInputId);
+    if (card) {
+      card.querySelectorAll("button,input").forEach((el) => (el.disabled = true));
+      userInputs.delete(params.userInputId);
+    }
   }
+}
+
+function finishTurn(turnId, text) {
+  const t = document.createElement("div");
+  t.className = "terminal";
+  t.textContent = text;
+  log.appendChild(t);
+  if (turnId === runningTurnId) {
+    runningTurnId = null;
+    document.getElementById("send").disabled = false;
+    const c = document.getElementById("cancelrow");
+    if (c) c.remove();
+  }
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
 function showCancel(turnId) {
@@ -237,7 +305,31 @@ function showCancel(turnId) {
   log.appendChild(row);
 }
 
+function decideApproval(approvalId, choiceId, row) {
+  row.querySelectorAll("button").forEach((x) => (x.disabled = true));
+  return api("/api/approval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, approvalId, choiceId }),
+  }).catch((e) => {
+    row.querySelectorAll("button").forEach((x) => (x.disabled = false));
+    addMsg("error", "approval failed: " + e.message);
+  });
+}
+
+function addApprovalButtons(row, p) {
+  for (const c of p.availableChoices ?? []) {
+    const b = document.createElement("button");
+    b.className = "ghost";
+    b.textContent = c.label ?? c.choiceId;
+    if (c.rulePreview) b.title = c.rulePreview;
+    b.onclick = () => decideApproval(p.approvalId, c.choiceId, row);
+    row.appendChild(b);
+  }
+}
+
 function showApproval(p) {
+  if (!p || approvals.has(p.approvalId)) return;
   const card = document.createElement("div");
   card.className = "approval";
   const title = document.createElement("div");
@@ -251,26 +343,90 @@ function showApproval(p) {
   }
   const row = document.createElement("div");
   row.className = "choices";
-  for (const c of p.availableChoices ?? []) {
-    const b = document.createElement("button");
-    b.className = "ghost";
-    b.textContent = c.label ?? c.choiceId;
-    b.onclick = async () => {
-      row.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      await api("/api/approval", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId, approvalId: p.approvalId,
-          requirementId: p.currentRequirementId, choiceId: c.choiceId,
-        }),
-      });
-    };
-    row.appendChild(b);
-  }
+  addApprovalButtons(row, p);
   card.appendChild(row);
   log.appendChild(card);
   approvals.set(p.approvalId, card);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function showUserInput(p) {
+  if (!p || userInputs.has(p.userInputId)) return;
+  const card = document.createElement("div");
+  card.className = "approval";
+  const title = document.createElement("div");
+  title.textContent = `Muse asks: ${p.toolName ?? "a tool"} needs input`;
+  card.appendChild(title);
+  for (const q of p.questions ?? []) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "margin-top:8px;";
+    const h = document.createElement("div");
+    h.style.cssText = "font-weight:600;";
+    h.textContent = q.header ? `${q.header}: ${q.question}` : q.question;
+    wrap.appendChild(h);
+    const multi = q.selection?.mode === "multiple";
+    for (const o of q.options ?? []) {
+      const label = document.createElement("label");
+      label.style.cssText = "display:block;font-size:13px;margin-top:4px;";
+      const input = document.createElement("input");
+      input.type = multi ? "checkbox" : "radio";
+      input.name = "q-" + q.id;
+      input.value = o.label;
+      input.dataset.q = q.id;
+      if (o.description) input.title = o.description;
+      label.appendChild(input);
+      label.append(" " + o.label);
+      wrap.appendChild(label);
+    }
+    const custom = document.createElement("input");
+    custom.placeholder = "Or type a custom answer…";
+    custom.dataset.custom = q.id;
+    custom.style.cssText = "margin-top:4px;width:100%;font-size:13px;padding:6px;border:1px solid var(--line);border-radius:6px;";
+    wrap.appendChild(custom);
+    card.appendChild(wrap);
+  }
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:12px;color:#8a6d00;margin-top:6px;";
+  const row = document.createElement("div");
+  row.className = "choices";
+  const b = document.createElement("button");
+  b.className = "ghost";
+  b.textContent = "Answer";
+  b.onclick = async () => {
+    const answers = [];
+    for (const q of p.questions ?? []) {
+      const free = (card.querySelector(`[data-custom="${CSS.escape(q.id)}"]`).value ?? "").trim();
+      if (free) {
+        answers.push({ questionId: q.id, freeText: free });
+        continue;
+      }
+      const picked = [...card.querySelectorAll(`input[data-q="${CSS.escape(q.id)}"]:checked`)].map((el) => el.value);
+      if (q.selection?.mode === "multiple" ? picked.length === 0 : picked.length !== 1) {
+        hint.textContent = "Answer every question to continue.";
+        return;
+      }
+      answers.push(q.selection?.mode === "multiple"
+        ? { questionId: q.id, selectedLabels: picked }
+        : { questionId: q.id, selectedLabel: picked[0] });
+    }
+    b.disabled = true;
+    try {
+      await api("/api/user-input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, userInputId: p.userInputId, answers }),
+      });
+      card.querySelectorAll("button,input").forEach((el) => (el.disabled = true));
+    } catch (e) {
+      b.disabled = false;
+      hint.textContent = "Could not send: " + e.message;
+    }
+  };
+  row.appendChild(b);
+  card.appendChild(row);
+  card.appendChild(hint);
+  log.appendChild(card);
+  userInputs.set(p.userInputId, card);
   window.scrollTo(0, document.body.scrollHeight);
 }
 

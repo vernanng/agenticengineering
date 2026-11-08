@@ -5,7 +5,7 @@
     "": {
       "name": "agenticengineering",
       "dependencies": {
-        "@muse-code/sdk": "^1.4.14",
+        "@muse-code/sdk": "1.4.14",
         "@types/node": "^26.6.6",
       },
     },
