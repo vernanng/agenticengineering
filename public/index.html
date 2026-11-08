@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Muse Chat</title>
+<style>
+  :root { --ink: #1c1c1c; --muted: #666; --line: #e2e2e0; --bg: #f3f3f1; --accent: #1c1c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Helvetica, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+  header .sess { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+  header button { margin-left: 0; }
+  header select { margin-left: auto; font-size: 13px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
+  button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px 12px 120px; }
+  .msg { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { background: var(--accent); color: #fff; border-color: var(--accent); margin-left: 80px; }
+  .msg .kind { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .msg.user .kind { color: #bbb; }
+  .msg.streaming { border-style: dashed; }
+  .msg .cursor { display: inline-block; width: 7px; height: 13px; background: #999; vertical-align: -2px; }
+  .approval { border: 1px solid #c9a227; background: #fffdf4; border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-size: 13px; }
+  .approval .choices { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .terminal { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+  .cancelrow { margin: -2px 0 8px; }
+  footer { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--line); padding: 10px 12px; }
+  footer form { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; }
+  footer input { flex: 1; font-size: 14px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; }
+  #warn { max-width: 760px; margin: 0 auto; padding: 8px 12px 0; font-size: 12px; color: #8a6d00; }
+  #traffic { position: fixed; left: 0; right: 0; bottom: 62px; max-height: 42vh; overflow: auto; background: #111; color: #ddd; font-family: ui-monospace, monospace; font-size: 11px; padding: 8px 12px; border-top: 1px solid #333; }
+  #traffic .tin { color: #7fd08a; }
+  #traffic .tout { color: #7fb8d0; }
+  #traffic pre { margin: 2px 0 8px; white-space: pre-wrap; word-break: break-word; color: #999; max-height: 120px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Muse Chat</h1>
+  <span class="sess" id="sess"></span>
+  <select id="mode" title="Permission profile for new chats"></select>
+  <button class="ghost" id="trafficbtn">Traffic</button>
+  <button class="ghost" id="newchat">New chat</button>
+</header>
+<div id="warn"></div>
+<main id="log"></main>
+<div id="traffic" hidden></div>
+<footer>
+  <form id="composer">
+    <input id="input" autocomplete="off" placeholder="Ask Muse anything about this workspace…" />
+    <button id="send" type="submit">Send</button>
+  </form>
+</footer>
+<script>
+const log = document.getElementById("log");
+const sessEl = document.getElementById("sess");
+let sessionId = null;
+let runningTurnId = null;
+const items = new Map(); // itemId -> element
+const approvals = new Map();
+
+function addMsg(kind, text, cls = "") {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  const k = document.createElement("div");
+  k.className = "kind";
+  k.textContent = kind;
+  div.appendChild(k);
+  const body = document.createElement("div");
+  body.textContent = text;
+  div.appendChild(body);
+  log.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+  return { div, body };
+}
+
+// Generic item text: agent/user text, tool call args, or a compact fallback.
+function itemText(item) {
+  if (!item || typeof item !== "object") return String(item ?? "");
+  if (typeof item.text === "string" && item.text) return item.text;
+  if (typeof item.output === "string" && item.output) return item.output;
+  if (typeof item.fallbackText === "string" && item.fallbackText) return item.fallbackText;
+  const details = item.toolName ? `${item.toolName} ${item.rawArgs ?? ""}` : JSON.stringify(item);
+  return details.length > 500 ? details.slice(0, 500) + "…" : details;
+}
+
+async function api(path, opts) {
+  if (opts && opts.body) inspect("out", path, JSON.parse(opts.body));
+  else inspect("out", path, null);
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+// Development mode: raw two-way traffic log, newest first, capped.
+const trafficEl = document.getElementById("traffic");
+function inspect(dir, label, data) {
+  const line = document.createElement("div");
+  const head = document.createElement("div");
+  head.className = dir === "in" ? "tin" : "tout";
+  head.textContent = (dir === "in" ? "← " : "→ ") + label;
+  line.appendChild(head);
+  if (data !== null && data !== undefined) {
+    const pre = document.createElement("pre");
+    const json = JSON.stringify(data);
+    pre.textContent = json.length > 1200 ? json.slice(0, 1200) + "…" : json;
+    pre.title = json;
+    line.appendChild(pre);
+  }
+  trafficEl.prepend(line);
+  while (trafficEl.children.length > 80) trafficEl.lastChild.remove();
+}
+
+document.getElementById("trafficbtn").addEventListener("click", () => {
+  trafficEl.hidden = !trafficEl.hidden;
+});
+
+function currentProfile() {
+  const v = document.getElementById("mode").value;
+  return v ? v : null;
+}
+
+async function newSession() {
+  const s = await api("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile: currentProfile() }),
+  });
+  sessionId = s.sessionId;
+  sessEl.textContent = sessionId;
+  log.innerHTML = "";
+  items.clear();
+}
+
+async function init() {
+  const status = await api("/api/status");
+  const catalog = await api("/api/profiles");
+  const mode = document.getElementById("mode");
+  const def = document.createElement("option");
+  def.value = "";
+  def.textContent = "Host default";
+  mode.appendChild(def);
+  for (const p of catalog.profiles ?? []) {
+    if (!p.available) continue;
+    const o = document.createElement("option");
+    o.value = p.profileId;
+    o.textContent = p.label;
+    o.title = p.description ?? "";
+    mode.appendChild(o);
+  }
+  mode.addEventListener("change", newSession);
+  sessionId = status.sessionId;
+  sessEl.textContent = sessionId;
+  if (status.fingerprintWarning) {
+    document.getElementById("warn").textContent = "Host protocol differs from this SDK: " + status.fingerprintWarning;
+  }
+  const resumed = await api("/api/history?sessionId=" + encodeURIComponent(sessionId));
+  const history = resumed.history;
+  if (history && history.mode === "inline" && Array.isArray(history.items)) {
+    for (const item of history.items) {
+      const kind = item.kind || "message";
+      addMsg(kind, itemText(item), kind === "userMessage" ? "user" : "");
+    }
+  }
+  const es = new EventSource("/events");
+  es.addEventListener("msp", (e) => route(JSON.parse(e.data)));
+}
+
+function route({ method, params }) {
+  inspect("in", method, params);
+  if (!params || params.sessionId !== sessionId) return;
+  if (method === "item/started") {
+    const { div, body } = addMsg(params.item?.kind ?? "item", "", "streaming");
+    items.set(params.itemId ?? params.item?.itemId, { div, body, text: "" });
+  } else if (method === "item/delta") {
+    const slot = items.get(params.itemId);
+    if (slot) {
+      slot.text += params.delta ?? "";
+      slot.body.textContent = slot.text;
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  } else if (method === "item/completed") {
+    const id = params.itemId ?? params.item?.itemId;
+    const slot = items.get(id);
+    const text = params.item ? itemText(params.item) : (slot?.text ?? "");
+    if (slot) {
+      slot.body.textContent = text;
+      slot.div.classList.remove("streaming");
+    } else {
+      addMsg(params.item?.kind ?? "item", text);
+    }
+  } else if (method === "turn/started") {
+    runningTurnId = params.turnId;
+    showCancel(params.turnId);
+  } else if (method === "turn/completed") {
+    const t = document.createElement("div");
+    t.className = "terminal";
+    t.textContent = `turn ${params.turnId} ${params.terminal}` +
+      (params.error ? `: ${params.error.message ?? params.error.kind}` : "");
+    log.appendChild(t);
+    if (params.turnId === runningTurnId) {
+      runningTurnId = null;
+      document.getElementById("send").disabled = false;
+      const c = document.getElementById("cancelrow");
+      if (c) c.remove();
+    }
+  } else if (method === "approval/requested") {
+    showApproval(params);
+  } else if (method === "approval/resolved") {
+    const card = approvals.get(params.approvalId);
+    if (card) {
+      card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    }
+  }
+}
+
+function showCancel(turnId) {
+  document.getElementById("send").disabled = true;
+  const row = document.createElement("div");
+  row.className = "cancelrow";
+  row.id = "cancelrow";
+  const btn = document.createElement("button");
+  btn.className = "ghost";
+  btn.textContent = "Stop";
+  btn.onclick = async () => {
+    await api("/api/turn/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, turnId }),
+    });
+  };
+  row.appendChild(btn);
+  log.appendChild(row);
+}
+
+function showApproval(p) {
+  const card = document.createElement("div");
+  card.className = "approval";
+  const title = document.createElement("div");
+  title.textContent = `Muse wants approval: ${p.subject?.kind ?? "tool call"} — ${(p.subject?.title ?? p.toolCallId ?? "")}`;
+  card.appendChild(title);
+  if (p.rawArgs) {
+    const args = document.createElement("pre");
+    args.style.cssText = "font-size:12px;overflow:auto;max-height:120px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px;";
+    args.textContent = p.rawArgs;
+    card.appendChild(args);
+  }
+  const row = document.createElement("div");
+  row.className = "choices";
+  for (const c of p.availableChoices ?? []) {
+    const b = document.createElement("button");
+    b.className = "ghost";
+    b.textContent = c.label ?? c.choiceId;
+    b.onclick = async () => {
+      row.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      await api("/api/approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId, approvalId: p.approvalId,
+          requirementId: p.currentRequirementId, choiceId: c.choiceId,
+        }),
+      });
+    };
+    row.appendChild(b);
+  }
+  card.appendChild(row);
+  log.appendChild(card);
+  approvals.set(p.approvalId, card);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+document.getElementById("composer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("input");
+  const text = input.value.trim();
+  if (!text || runningTurnId) return;
+  input.value = "";
+  addMsg("you", text, "user");
+  const ack = await api("/api/turn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, text }),
+  });
+  runningTurnId = ack.turnId;
+  showCancel(ack.turnId);
+});
+
+document.getElementById("newchat").addEventListener("click", newSession);
+
+init().catch((e) => {
+  addMsg("error", "Could not reach the chat server: " + e.message);
+});
+</script>
+</body>
+</html>

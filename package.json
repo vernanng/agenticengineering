@@ -1,11 +1,13 @@
 {
   "name": "agenticengineering",
   "version": "0.1.0",
-  "module": "index.ts",
+  "module": "src/index.ts",
   "type": "module",
   "scripts": {
-    "start": "node --env-file=.env index.ts",
-    "start:bun": "bun run index.ts"
+    "dev": "node --watch --env-file=.env src/index.ts",
+    "dev:bun": "bun --watch run src/index.ts",
+    "start": "node --env-file=.env src/index.ts",
+    "start:bun": "bun run src/index.ts"
   },
   "dependencies": {
     "@muse-code/sdk": "^1.4.14",
