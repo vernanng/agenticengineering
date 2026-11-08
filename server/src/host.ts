@@ -7,7 +7,14 @@ import {
   type ApprovalHandler,
   type Session,
 } from "@muse-code/sdk";
+import path from "node:path";
 import { museBin, workspaceRoot } from "./config.ts";
+import {
+  createFileDurable,
+  createMemoryDurable,
+  durableHistoryItems,
+  type DurableStore,
+} from "./durable.ts";
 import {
   UnknownApprovalError,
   UnknownSessionError,
@@ -20,7 +27,7 @@ type ApprovalRequest = Parameters<ApprovalHandler>[0];
 // MSP host on the SDK facade (docs/api-server.html: the Host facade).
 // The client routes every server event to its session, so the fold behind
 // each session stays gap-recovered; this layer only fans out to browsers.
-export async function startHost(): Promise<Host> {
+export async function startHost(opts?: { durable?: DurableStore }): Promise<Host> {
   const handshake = spawnMspConnection({
     command: museBin,
     args: ["serve"],
@@ -38,11 +45,28 @@ export async function startHost(): Promise<Host> {
   console.log("MSP ready:", JSON.stringify(msp.initializeResult.serverInfo));
   if (msp.fingerprintWarning) console.warn("fingerprint warning:", msp.fingerprintWarning.message);
 
+  // Durable mirror: admissions persist before the SDK call and outcomes on
+  // completion. Opening the same directory after a restart recovers the
+  // transcript and fails turns that died mid-flight.
+  let durable = opts?.durable;
+  if (!durable) {
+    const dir = process.env.DURABLE_DIR ?? path.join(workspaceRoot, ".durable");
+    try {
+      durable = createFileDurable(dir);
+    } catch (e) {
+      console.warn("durable unavailable, continuing in memory:", (e as Error).message);
+      durable = createMemoryDurable();
+    }
+  }
+
   // shortcut: sessions are never closed or evicted, so this map only grows. Fine for one
   // local user (tens of sessions); the SDK has no per-session close, only client.close().
   // Upgrade to a cap plus a close endpoint when many sessions become normal.
   const sessions = new Map<string, Session>();
-  const approvals = new Map<string, { sessionId: string; resolve: (d: ApprovalDecisionInput) => void }>();
+  const approvals = new Map<
+    string,
+    { sessionId: string; resolve: (d: ApprovalDecisionInput) => void; request: ApprovalRequest }
+  >();
   const subscribers = new Set<(event: string, data: unknown) => void>();
   const emit = (event: string, data: unknown) => {
     for (const send of subscribers) send(event, data);
@@ -74,7 +98,7 @@ export async function startHost(): Promise<Host> {
     session.onApproval(
       (request: ApprovalRequest) =>
         new Promise<ApprovalDecisionInput>((resolve) => {
-          approvals.set(request.approvalId, { sessionId: session.sessionId, resolve });
+          approvals.set(request.approvalId, { sessionId: session.sessionId, resolve, request });
         }),
     );
     session.onApprovalError((failure: ApprovalFailure) => {
@@ -103,12 +127,26 @@ export async function startHost(): Promise<Host> {
     startSession,
 
     async sendTurn(sessionId: string, text: string) {
-      const turn = await needSession(sessionId).sendUserTurn({ input: [{ type: "text", text }] });
+      const session = needSession(sessionId);
+      const admitted = durable.append(sessionId, "user", text);
+      let turn: Awaited<ReturnType<Session["sendUserTurn"]>>;
+      try {
+        turn = await session.sendUserTurn({ input: [{ type: "text", text }] });
+      } catch (e) {
+        durable.failEntry(admitted.entryId);
+        throw e;
+      }
+      durable.attachTurn(admitted.entryId, turn.turnId);
       // The ack only admits the turn; forward its server-authored outcome too,
       // so a terminal the broadcast never carries (unqueued, host death) still
-      // reaches the browser as turn/ended.
+      // reaches the browser as turn/ended. The outcome also settles the log.
       void turn.completed.then(
-        (outcome) =>
+        (outcome) => {
+          durable.settleTurn(
+            turn.turnId,
+            outcome.kind === "completed" ? "done" : "failed",
+            `turn ${outcome.kind}`,
+          );
           emit("msp", {
             method: "turn/ended",
             params: {
@@ -117,12 +155,15 @@ export async function startHost(): Promise<Host> {
               outcome: outcome.kind,
               terminal: outcome.kind === "completed" ? outcome.params.terminal : outcome.kind,
             },
-          }),
-        () =>
+          });
+        },
+        () => {
+          durable.settleTurn(turn.turnId, "failed", "turn rejected");
           emit("msp", {
             method: "turn/ended",
             params: { sessionId, turnId: turn.turnId, outcome: "rejected" },
-          }),
+          });
+        },
       );
       return { turnId: turn.turnId };
     },
@@ -130,6 +171,15 @@ export async function startHost(): Promise<Host> {
     cancelTurn(sessionId: string, turnId?: string) {
       needSession(sessionId);
       return msp.connection.command("turn/cancel", turnId ? { sessionId, turnId } : { sessionId });
+    },
+
+    getApprovalRequest(sessionId: string, approvalId: string) {
+      needSession(sessionId); // unknown session is 404, before the approval check below
+      const waiter = approvals.get(approvalId);
+      if (!waiter || waiter.sessionId !== sessionId) {
+        throw new UnknownApprovalError(`approval ${approvalId} is not pending`);
+      }
+      return waiter.request;
     },
 
     decideApproval(sessionId: string, approvalId: string, choiceId: string) {
@@ -149,24 +199,40 @@ export async function startHost(): Promise<Host> {
     // Unbounded fold reads; server.ts slices the tail per ?limit=. Push the
     // limit into the fold once the SDK supports bounded reads.
     // shortcut: pending approvals/userInputs are uncapped live sets; bound them when sessions run for days.
+    // Dead sessions (no live fold after a restart) replay the durable log;
+    // truly unknown sessions still 404 below.
     history(sessionId: string) {
-      return { mode: "inline" as const, items: needSession(sessionId).fold.items.list() };
+      const session = sessions.get(sessionId);
+      if (session) {
+        return { mode: "inline" as const, items: session.fold.items.list() };
+      }
+      const items = durableHistoryItems(sessionId, durable);
+      if (items.length === 0) throw new UnknownSessionError(`unknown session ${sessionId}`);
+      return { mode: "inline" as const, items };
     },
 
     snapshot(sessionId: string) {
-      const session = needSession(sessionId);
-      return {
-        sessionId,
-        items: session.fold.items.list(),
-        approvals: session.fold.pendingApprovals().map((p) => p.requested),
-        userInputs: session.fold.pendingUserInputs(),
-      };
+      const session = sessions.get(sessionId);
+      if (session) {
+        return {
+          sessionId,
+          items: session.fold.items.list(),
+          approvals: session.fold.pendingApprovals().map((p) => p.requested),
+          userInputs: session.fold.pendingUserInputs(),
+        };
+      }
+      const items = durableHistoryItems(sessionId, durable);
+      if (items.length === 0) throw new UnknownSessionError(`unknown session ${sessionId}`);
+      return { sessionId, items, approvals: [], userInputs: [] };
     },
 
     listProfiles() {
       return msp.connection.command("permissionProfile/list", {});
     },
 
-    close: () => client.close(),
+    close: async () => {
+      durable.close();
+      await client.close();
+    },
   };
 }

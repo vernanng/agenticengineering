@@ -31,6 +31,14 @@ function fakeHost() {
       calls.push(["cancelTurn", sessionId, turnId]);
       return { sessionId, turnId: turnId ?? null };
     },
+    getApprovalRequest: (sessionId: string, approvalId: string) => {
+      if (sessionId !== "sess-1") throw new UnknownSessionError(sessionId);
+      if (approvalId !== "appr-1") throw new UnknownApprovalError(approvalId);
+      return {
+        approvalId,
+        availableChoices: [{ choiceId: "allow-once", decision: "approved" }],
+      };
+    },
     decideApproval: (sessionId: string, approvalId: string, choiceId: string) => {
       calls.push(["decideApproval", sessionId, approvalId, choiceId]);
       if (approvalId !== "appr-1") throw new UnknownApprovalError(approvalId);
@@ -61,7 +69,9 @@ function fakeHost() {
 }
 
 async function withServer(host: Parameters<typeof createServer>[0], fn: (base: string) => Promise<void>) {
-  const server = createServer(host);
+  // Allow-stub: these tests cover routing and error shape, not the judge
+  // (server/test/judge.test.ts covers that with safe/unsafe/blocked stubs).
+  const server = createServer(host, { judge: async () => ({ safe: true }) });
   await server.listen({ port: 0, host: "127.0.0.1" });
   const { port } = server.server.address() as { port: number };
   try {

@@ -1,6 +1,8 @@
 node_modules
 dist
 .env
+.durable
 .agents
 .codex
 .impeccable
+durable

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend focus: the fold never calls JEV · Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+    .note {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 14px;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>Backend focus: the fold never calls JEV</h1>
+    <p class="note">EVAL serves the Judge page and judges every approval before it reaches the SDK; the SDK session and fold never call JEV.</p>
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="client-server-architecture-title client-server-architecture-desc">
+        <title id="client-server-architecture-title">Backend focus: the fold never calls JEV</title>
+        <desc id="client-server-architecture-desc">Focused backend view: the Host facade reads the SDK fold while TypeSafe JEV serves only evaluate requests from the Judge page and the safety vote.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Zones (drawn first) -->
+        <rect x="24" y="96" width="176" height="280" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="32" y="100" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="60" y="109" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CLIENT</text>
+
+        <rect x="224" y="96" width="352" height="280" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="232" y="100" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="260" y="109" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SERVER</text>
+
+        <rect x="600" y="96" width="336" height="280" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="608" y="100" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="640" y="109" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">BACKENDS</text>
+
+        <!-- Arrows (behind nodes) -->
+        <!-- A1 Browser -> Fastify -->
+        <line x1="184" y1="218" x2="248" y2="218" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="188" y="226" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="216" y="235" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">REST/SSE</text>
+
+        <!-- A2 Fastify -> Host (headline) -->
+        <line x1="400" y1="218" x2="424" y2="218" stroke="#bf4520" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+        <rect x="392" y="226" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="410" y="235" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CALL</text>
+
+        <!-- A3 Host -> SDK -->
+        <line x1="552" y1="218" x2="688" y2="218" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="592" y="198" width="56" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="620" y="207" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SESSION</text>
+
+        <!-- A4 SDK -> fold -->
+        <line x1="720" y1="256" x2="720" y2="280" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="728" y="260" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="746" y="269" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">READ</text>
+
+        <!-- A5 Fastify -> TypeSafe EVAL (below fold, no crossings) -->
+        <path d="M 320,256 V 360 Q 320,368 328,368 H 832 Q 840,368 840,360 V 356" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <rect x="552" y="348" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="570" y="357" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">EVAL</text>
+
+        <!-- A6 fold -> Fastify snapshot return (dashed) -->
+        <path d="M 624,318 H 368 Q 360,318 360,310 V 256" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <rect x="468" y="298" width="36" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="486" y="307" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SNAP</text>
+
+        <!-- Nodes -->
+        <!-- Browser -->
+        <rect x="40" y="180" width="144" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="180" width="144" height="76" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <rect x="48" y="188" width="32" height="12" rx="2" fill="none" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="64" y="197" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">USER</text>
+        <text x="112" y="222" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Browser</text>
+        <text x="112" y="238" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">tabs · REST + SSE</text>
+
+        <!-- Fastify hub (focal) -->
+        <rect x="248" y="180" width="152" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="248" y="180" width="152" height="76" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.4"/>
+        <rect x="256" y="188" width="28" height="12" rx="2" fill="none" stroke="#bf4520" stroke-width="0.8"/>
+        <text x="270" y="197" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+        <text x="324" y="222" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fastify hub</text>
+        <text x="324" y="238" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">server.ts :3000</text>
+
+        <!-- Host facade -->
+        <rect x="424" y="180" width="128" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="424" y="180" width="128" height="76" rx="6" fill="none" stroke="#2d3142" stroke-width="1.1"/>
+        <rect x="432" y="188" width="44" height="12" rx="2" fill="none" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="454" y="197" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">FACADE</text>
+        <text x="488" y="222" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Host facade</text>
+        <text x="488" y="238" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">host.ts sessions</text>
+
+        <!-- SDK -->
+        <rect x="624" y="180" width="128" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="624" y="180" width="128" height="76" rx="6" fill="rgba(45,49,66,0.04)" stroke="#2d3142" stroke-width="1.1"/>
+        <rect x="632" y="188" width="28" height="12" rx="2" fill="none" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="646" y="197" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SDK</text>
+        <text x="688" y="222" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SDK</text>
+        <text x="688" y="238" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">muse serve</text>
+
+        <!-- fold -->
+        <rect x="624" y="280" width="128" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="624" y="280" width="128" height="76" rx="6" fill="rgba(45,49,66,0.04)" stroke="#2d3142" stroke-width="1.1"/>
+        <rect x="632" y="288" width="38" height="12" rx="2" fill="none" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+        <text x="651" y="297" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+        <text x="688" y="322" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fold</text>
+        <text x="688" y="338" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">list() · no JEV</text>
+
+        <!-- TypeSafe -->
+        <rect x="776" y="280" width="128" height="76" rx="6" fill="#f5f5f5"/>
+        <rect x="776" y="280" width="128" height="76" rx="6" fill="none" stroke="#2e5aa8" stroke-width="1.2"/>
+        <rect x="784" y="288" width="28" height="12" rx="2" fill="none" stroke="#2e5aa8" stroke-width="0.8"/>
+        <text x="798" y="297" fill="#2e5aa8" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+        <text x="840" y="322" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">TypeSafe</text>
+        <text x="840" y="338" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">JEV · evaluate</text>
+
+        <!-- Legend: horizontal bottom strip -->
+        <rect x="48" y="500" width="12" height="12" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="66" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">USER</text>
+
+        <rect x="128" y="500" width="12" height="12" rx="2" fill="rgba(45,49,66,0.04)" stroke="#2d3142" stroke-width="1"/>
+        <text x="146" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">STORE</text>
+
+        <rect x="220" y="500" width="12" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="238" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">API</text>
+
+        <rect x="292" y="500" width="12" height="12" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
+        <text x="310" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">FOCAL</text>
+
+        <rect x="380" y="500" width="12" height="12" rx="2" fill="none" stroke="#2e5aa8" stroke-width="1"/>
+        <text x="398" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">EXTERNAL</text>
+
+        <text x="912" y="509" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">SNAP = SNAPSHOT TAIL</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

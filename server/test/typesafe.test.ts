@@ -11,6 +11,7 @@ const stubHost = {
   sendTurn: async () => ({ turnId: "turn-1" }),
   cancelTurn: async () => ({}),
   decideApproval: () => {},
+  getApprovalRequest: () => ({ approvalId: "appr-1", availableChoices: [] }),
   answerUserInput: async () => ({}),
   history: () => ({ mode: "inline" as const, items: [] }),
   snapshot: () => ({ sessionId: "sess-1", items: [], approvals: [], userInputs: [] }),

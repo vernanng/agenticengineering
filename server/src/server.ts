@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluate, fail, validEvaluateBody } from "./typesafe.ts";
+import { isEligible, jevJudge, type JudgeFn } from "./judge.ts";
+import type { ApprovalRequest } from "../../client/src/components/ApprovalCard.svelte";
 
 export class UnknownSessionError extends Error {}
 export class UnknownApprovalError extends Error {}
@@ -25,6 +27,7 @@ export interface Host {
   startSession(profile?: string | null): Promise<string>;
   sendTurn(sessionId: string, text: string): Promise<{ turnId: string }>;
   cancelTurn(sessionId: string, turnId?: string): Promise<unknown>;
+  getApprovalRequest(sessionId: string, approvalId: string): ApprovalRequest;
   decideApproval(sessionId: string, approvalId: string, choiceId: string): void;
   answerUserInput(sessionId: string, userInputId: string, answers: UserInputAnswerInput[]): Promise<unknown>;
   history(sessionId: string): { mode: "inline"; items: unknown[] };
@@ -100,7 +103,9 @@ function queryLimit(query: unknown, fallback = 50): number {
   return Number.isFinite(n) && (n as number) > 0 ? Math.min(n as number, 200) : fallback;
 }
 
-export function createServer(host: Host): FastifyInstance {
+export function createServer(host: Host, opts?: { judge?: JudgeFn }): FastifyInstance {
+  // Fail-closed default: the real JEV judge. Tests inject a stub.
+  const judge = opts?.judge ?? jevJudge;
   const app = Fastify({ bodyLimit: 1_000_000, requestTimeout: 30_000 });
 
   // Middleware: every response carries its own latency.
@@ -223,12 +228,23 @@ export function createServer(host: Host): FastifyInstance {
 
   // The facade answers through its parked approval handler, which checks the
   // choice against the server's current offer; no requirementId needed.
-  app.post("/api/approval", { schema: { body: approvalBody } }, async (req) => {
+  // Every approval is judged by JEV first: anything but a clear safe vote is
+  // 403 and the parked approval stays open for a human. Fail-closed.
+  app.post("/api/approval", { schema: { body: approvalBody } }, async (req, reply) => {
     const body = req.body as { sessionId?: string; approvalId?: string; choiceId?: string };
     if (typeof body.approvalId !== "string" || typeof body.choiceId !== "string") {
       fail(400, "approvalId and choiceId are required");
     }
-    host.decideApproval(body.sessionId ?? host.defaultSessionId, body.approvalId, body.choiceId);
+    const sessionId = body.sessionId ?? host.defaultSessionId;
+    const request = host.getApprovalRequest(sessionId, body.approvalId);
+    if (!isEligible(request, body.choiceId)) {
+      return reply.code(403).send({ error: "rejected by judge" });
+    }
+    const verdict = await judge(request).catch(() => null);
+    if (!verdict?.safe) {
+      return reply.code(403).send({ error: "rejected by judge" });
+    }
+    host.decideApproval(sessionId, body.approvalId, body.choiceId);
     return { approvalId: body.approvalId, choiceId: body.choiceId };
   });
 
