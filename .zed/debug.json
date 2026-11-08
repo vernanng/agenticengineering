@@ -1,10 +1,10 @@
 [
   {
-    "label": "Debug server",
+    "label": "Server",
     "adapter": "JavaScript",
     "request": "launch",
-    "program": "${workspaceFolder}/server/src/index.ts",
-    "cwd": "${workspaceFolder}/server",
-    "envFile": "${workspaceFolder}/.env"
+    "program": "${ZED_WORKTREE_ROOT}/server/src/index.ts",
+    "cwd": "${ZED_WORKTREE_ROOT}/server",
+    "envFile": "${ZED_WORKTREE_ROOT}/.env"
   }
 ]
