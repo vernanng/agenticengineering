@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { scrollToId, type ChatStore } from "../lib/chat.svelte";
-  import { shape } from "../shape";
+  import { scrollToId, type ChatStore } from "../lib/chat.svelte.ts";
+  import { shape } from "../shape.ts";
 
   let { chat }: { chat: ChatStore } = $props();
 </script>
@@ -14,7 +14,9 @@
         <span class="badge">{chat.pendingApprovalEntries.length + chat.pendingInputEntries.length}</span>
       {/if}
     </button>
-    <button class="navlink" onclick={() => scrollToId("panel-traffic")}>Traffic</button>
+    {#if shape.showTraffic}
+      <button class="navlink" onclick={() => scrollToId("panel-traffic")}>Traffic</button>
+    {/if}
     <button class="navlink" onclick={() => scrollToId("panel-session")}>Session</button>
   </nav>
 

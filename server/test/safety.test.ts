@@ -33,12 +33,17 @@ const request = (over: Record<string, unknown> = {}) => ({
 describe("safety gate", () => {
   it("picks only the narrow one-shot grant", () => {
     const choices = [
-      { choiceId: "deny", decision: "denied" },
-      { choiceId: "allow-session", decision: "approvedForSession" },
-      { choiceId: "allow-once", decision: "approved" },
+      { choiceId: "deny", decision: "denied", scope: "once" },
+      { choiceId: "allow-session", decision: "approvedForSession", scope: "session" },
+      { choiceId: "allow-once", decision: "approved", scope: "once" },
     ];
     assert.equal(approveOnceChoice(choices)?.choiceId, "allow-once");
     assert.equal(approveOnceChoice(choices.slice(0, 2)), undefined);
+    // An "approved" decision with a wider grant is not one-shot.
+    assert.equal(
+      approveOnceChoice([{ choiceId: "allow-wide", decision: "approved", scope: "session" }]),
+      undefined,
+    );
     assert.equal(approveOnceChoice([]), undefined);
   });
 

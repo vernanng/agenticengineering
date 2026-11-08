@@ -146,7 +146,7 @@ describe("POST /api/evaluate", () => {
         questions: { urgent: { type: "noul", instructions: "is this urgent?" } },
       });
       assert.equal(status, 500);
-      assert.match((json as { error: string }).error, /TYPESAFE_API_KEY/);
+      assert.deepEqual(json, { error: "evaluation failed" });
     });
   });
 
@@ -158,7 +158,7 @@ describe("POST /api/evaluate", () => {
         questions: { urgent: { type: "noul", instructions: "is this urgent?" } },
       });
       assert.equal(status, 502);
-      assert.deepEqual(json, { error: "bad questions" });
+      assert.deepEqual(json, { error: "evaluation failed" });
     });
   });
 });

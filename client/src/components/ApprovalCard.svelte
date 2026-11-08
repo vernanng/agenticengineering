@@ -17,8 +17,8 @@
 </script>
 
 <script lang="ts">
-  import { api, type TrafficSink } from "../lib/api";
-  import type { ApprovalVerdict } from "../lib/chat.svelte";
+  import { api, type TrafficSink } from "../lib/api.ts";
+  import type { ApprovalVerdict } from "../lib/chat.svelte.ts";
 
   interface Props {
     request: ApprovalRequest;

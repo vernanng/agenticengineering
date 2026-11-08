@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { navigate } from "../lib/router.svelte";
+  import { navigate } from "../lib/router.svelte.ts";
   import LwcHello from "./LwcHello.svelte";
 </script>
 

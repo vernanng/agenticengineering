@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { ChatStore } from "../lib/chat.svelte";
+  import type { ChatStore } from "../lib/chat.svelte.ts";
   import { evaluate } from "../lib/api.ts";
-  import { navigate } from "../lib/router.svelte";
+  import { navigate } from "../lib/router.svelte.ts";
 
   let { chat }: { chat: ChatStore } = $props();
 

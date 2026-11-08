@@ -1,5 +1,5 @@
-import { api, itemText, type TrafficSink } from "./api.ts";
-import { approveOnceChoice, judgeApproval } from "./safety";
+import { api, apiPost, itemText, type TrafficSink } from "./api.ts";
+import { approvalTitle, approveOnceChoice, judgeApproval } from "./safety.ts";
 import type { ApprovalRequest } from "../components/ApprovalCard.svelte";
 import type { UserInputRequest } from "../components/UserInputCard.svelte";
 
@@ -33,9 +33,9 @@ export function scrollToId(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-export function approvalTitle(r: ApprovalRequest): string {
-  return r.subject?.title ?? r.toolCallId ?? r.subject?.kind ?? "tool call";
-}
+// Smallest bounds: entry list and per-message text stay flat no matter the session length.
+const MAX_ENTRIES = 500;
+const MAX_MSG_TEXT = 20000;
 
 // Single owner of chat state + server wiring. Panels stay presentational:
 // to move a panel, move its one component tag in App.svelte.
@@ -54,27 +54,25 @@ export class ChatStore {
   nextId = 0;
   items = new Map<string, number>(); // itemId -> entry id
   entryById = new Map<number, Entry>(); // entry id -> entry, skips the full-list scan
+  // shortcut: seenItems grows with lifetime itemIds; scope it per session reset only (see newSession).
   seenItems = new Set<string>();
   pendingApprovals = new Set<string>();
   pendingInputs = new Set<string>();
   es: EventSource | null = null;
   sending = false;
 
+  // shortcut: full-list filters per render; pending sets stay tiny (open cards only),
+  // so an index would only pay off if entries grew past the MAX_ENTRIES cap.
   get pendingApprovalEntries() {
     return this.entries.filter((e) => e.type === "approval" && !e.resolved);
   }
   get pendingInputEntries() {
     return this.entries.filter((e) => e.type === "userinput" && !e.settled);
   }
-  get messageCount() {
-    return this.entries.filter((e) => e.type === "msg").length;
-  }
-  get turnCount() {
-    return this.entries.filter((e) => e.type === "term" && e.text.startsWith("turn ")).length;
-  }
-  get errorCount() {
-    return this.entries.filter((e) => e.type === "msg" && e.kind === "error").length;
-  }
+  // Counters, not filters: bumped at the single pushEntry choke point.
+  messageCount = $state(0);
+  turnCount = $state(0);
+  errorCount = $state(0);
   get connection() {
     return this.bootError ? "offline" : this.sessionId ? "live" : "starting";
   }
@@ -93,13 +91,44 @@ export class ChatStore {
     ].slice(0, 80);
   };
 
+  scrollScheduled = false;
+
   scroll() {
-    window.scrollTo(0, document.body.scrollHeight);
+    // One rAF per burst, and never yank a user who scrolled up to read.
+    if (this.scrollScheduled) return;
+    this.scrollScheduled = true;
+    requestAnimationFrame(() => {
+      this.scrollScheduled = false;
+      if (window.innerHeight + window.scrollY < document.body.scrollHeight - 200) return;
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+  }
+
+  countEntry(e: Entry, d: number) {
+    if (e.type === "msg") {
+      this.messageCount += d;
+      if (e.kind === "error") this.errorCount += d;
+    } else if (e.type === "term" && e.text.startsWith("turn ")) {
+      this.turnCount += d;
+    }
   }
 
   pushEntry(e: Entry) {
     this.entries.push(e);
     this.entryById.set(e.id, e);
+    this.countEntry(e, 1);
+    // shortcut: oldest-first eviction keeps open cards; revisit if caps shrink.
+    if (this.entries.length > MAX_ENTRIES) {
+      const idx = this.entries.findIndex((x) => {
+        if (x.type === "approval") return x.resolved;
+        if (x.type === "userinput") return x.settled;
+        return true;
+      });
+      const [old] = this.entries.splice(idx === -1 ? 0 : idx, 1);
+      this.entryById.delete(old.id);
+      for (const [k, v] of this.items) if (v === old.id) this.items.delete(k);
+      this.countEntry(old, -1);
+    }
   }
 
   slotById(id: number | undefined): Entry | undefined {
@@ -129,7 +158,7 @@ export class ChatStore {
           type: "msg",
           id: this.nextId++,
           kind,
-          text: itemText(item),
+          text: itemText(item).slice(0, MAX_MSG_TEXT),
           cls: kind === "userMessage" ? "user" : "",
           streaming: false,
         });
@@ -171,8 +200,10 @@ export class ChatStore {
       const slotId = this.items.get(params.itemId);
       if (slotId !== undefined) {
         const slot = this.slotById(slotId);
+        // shortcut: streaming text stops at MAX_MSG_TEXT; item/completed then
+        // replays the same head-truncated text, so giant outputs lose the tail.
         if (slot?.type === "msg") {
-          slot.text += params.delta ?? "";
+          if (slot.text.length < MAX_MSG_TEXT) slot.text += params.delta ?? "";
           this.scroll();
         }
       }
@@ -183,7 +214,7 @@ export class ChatStore {
       if (slotId !== undefined) {
         const slot = this.slotById(slotId);
         if (slot?.type === "msg") {
-          slot.text = text || slot.text;
+          slot.text = (text || slot.text).slice(0, MAX_MSG_TEXT);
           slot.streaming = false;
         }
       } else {
@@ -191,7 +222,7 @@ export class ChatStore {
           type: "msg",
           id: this.nextId++,
           kind: params.item?.kind ?? "item",
-          text,
+          text: text.slice(0, MAX_MSG_TEXT),
           cls: "",
           streaming: false,
         });
@@ -201,11 +232,15 @@ export class ChatStore {
     } else if (method === "turn/started") {
       this.runningTurnId = params.turnId;
     } else if (method === "turn/completed") {
-      this.finishTurn(
-        params.turnId,
-        `turn ${params.turnId} ${params.terminal}` +
-          (params.error ? `: ${params.error.message ?? params.error.kind}` : ""),
-      );
+      // Stale or duplicate completions (a turn/ended already folded this
+      // turn, or a new turn started) must not print a second terminal line.
+      if (params.turnId === this.runningTurnId) {
+        this.finishTurn(
+          params.turnId,
+          `turn ${params.turnId} ${params.terminal}` +
+            (params.error ? `: ${params.error.message ?? params.error.kind}` : ""),
+        );
+      }
     } else if (method === "turn/ended") {
       // Server-authored outcome the live tail never carried (unqueued, host
       // death). Ignored when turn/completed already finished this turn.
@@ -223,6 +258,7 @@ export class ChatStore {
         (e) => e.type === "approval" && e.request.approvalId === params.approvalId,
       );
       if (entry?.type === "approval") entry.resolved = true;
+      this.pendingApprovals.delete(params.approvalId);
     } else if (method === "approval/updated") {
       const entry = this.entries.find(
         (e) => e.type === "approval" && e.request.approvalId === params.approvalId,
@@ -267,7 +303,7 @@ export class ChatStore {
 
   watchSession() {
     if (this.es) this.es.close();
-    this.es = new EventSource("/events?sessionId=" + encodeURIComponent(this.sessionId ?? ""));
+    this.es = new EventSource("/events?sessionId=" + encodeURIComponent(this.sessionId ?? "") + "&limit=50");
     this.es.addEventListener("msp", (e) => {
       const { method, params } = JSON.parse((e as MessageEvent).data);
       this.route(method, params);
@@ -278,13 +314,9 @@ export class ChatStore {
   }
 
   async newSession() {
-    const s = (await api(
+    const s = (await apiPost(
       "/api/session",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile: this.selectedProfile ? this.selectedProfile : null }),
-      },
+      { profile: this.selectedProfile ? this.selectedProfile : null },
       this.sink,
     )) as { sessionId: string };
     this.sessionId = s.sessionId;
@@ -292,6 +324,9 @@ export class ChatStore {
     this.stopping = false;
     this.entries = [];
     this.entryById.clear();
+    this.messageCount = 0;
+    this.turnCount = 0;
+    this.errorCount = 0;
     this.items.clear();
     this.pendingApprovals.clear();
     this.pendingInputs.clear();
@@ -314,7 +349,7 @@ export class ChatStore {
     if (status.fingerprintWarning)
       this.fingerprintWarning = "Host protocol differs from this SDK: " + status.fingerprintWarning;
     const resumed = (await api(
-      "/api/history?sessionId=" + encodeURIComponent(this.sessionId),
+      "/api/history?sessionId=" + encodeURIComponent(this.sessionId) + "&limit=50",
       undefined,
       this.sink,
     )) as { history: { mode?: string; items?: unknown[] } };
@@ -322,25 +357,25 @@ export class ChatStore {
     this.watchSession();
   }
 
-  async sendText(raw: string) {
+  // False when the text was not consumed (a turn is already running): the
+  // caller must keep it in the composer instead of clearing the box.
+  async sendText(raw: string): Promise<boolean> {
     const text = raw.trim();
-    if (!text || this.runningTurnId || this.sending) return;
+    if (!text || this.runningTurnId || this.sending) return false;
     this.sending = true;
     this.pushEntry({ type: "msg", id: this.nextId++, kind: "you", text, cls: "user", streaming: false });
     this.scroll();
     try {
-      const ack = (await api(
+      const ack = (await apiPost(
         "/api/turn",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: this.sessionId, text }),
-        },
+        { sessionId: this.sessionId, text },
         this.sink,
       )) as { turnId: string };
       this.runningTurnId = ack.turnId;
+      return true;
     } catch (err) {
       this.pushError("Could not send: " + (err as Error).message);
+      return true;
     } finally {
       this.sending = false;
     }
@@ -350,15 +385,7 @@ export class ChatStore {
     const turnId = this.runningTurnId;
     this.stopping = true;
     try {
-      await api(
-        "/api/turn/cancel",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: this.sessionId, turnId }),
-        },
-        this.sink,
-      );
+      await apiPost("/api/turn/cancel", { sessionId: this.sessionId, turnId }, this.sink);
     } catch (err) {
       this.stopping = false;
       this.pushError("Could not stop the turn: " + (err as Error).message);
@@ -372,11 +399,8 @@ export class ChatStore {
 
   // One parked approval: show its card, then let Jev vote. A clear safe vote
   // auto-approves the one-shot grant; anything else stays a human decision.
-  // Approval entries are always touched through this lookup: only reads via
-  // the proxied entries array notify the UI; the raw object kept in
-  // entryById does not.
   lookupApproval(id: number): Extract<Entry, { type: "approval" }> | undefined {
-    const e = this.entries.find((x) => x.id === id);
+    const e = this.slotById(id);
     return e?.type === "approval" ? e : undefined;
   }
 
@@ -416,16 +440,12 @@ export class ChatStore {
       return;
     }
     try {
-      await api(
+      await apiPost(
         "/api/approval",
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: this.sessionId,
-            approvalId: entry.request.approvalId,
-            choiceId: choice.choiceId,
-          }),
+          sessionId: this.sessionId,
+          approvalId: entry.request.approvalId,
+          choiceId: choice.choiceId,
         },
         this.sink,
       );

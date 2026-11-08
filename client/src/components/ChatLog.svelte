@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatStore } from "../lib/chat.svelte";
+  import type { ChatStore } from "../lib/chat.svelte.ts";
   import ApprovalCard from "./ApprovalCard.svelte";
   import UserInputCard from "./UserInputCard.svelte";
 

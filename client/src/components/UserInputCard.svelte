@@ -27,7 +27,7 @@
 </script>
 
 <script lang="ts">
-  import { api, type TrafficSink } from "../lib/api";
+  import { api, type TrafficSink } from "../lib/api.ts";
 
   interface Props {
     request: UserInputRequest;

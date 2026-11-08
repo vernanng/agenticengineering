@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { approvalTitle, type ChatStore } from "../lib/chat.svelte";
-  import { shape } from "../shape";
+  import type { ChatStore } from "../lib/chat.svelte.ts";
+  import { approvalTitle } from "../lib/safety.ts";
+  import { shape } from "../shape.ts";
 
   let { chat }: { chat: ChatStore } = $props();
 </script>

@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, validEvaluateBody } from "./typesafe.ts";
+import { evaluate, fail, validEvaluateBody } from "./typesafe.ts";
 
 export class UnknownSessionError extends Error {}
 export class UnknownApprovalError extends Error {}
@@ -72,27 +72,36 @@ const sessionBody = {
 
 const turnBody = {
   type: "object",
-  properties: { sessionId: { type: "string" }, text: { type: "string" } },
+  properties: { sessionId: { type: ["string", "null"] }, text: { type: "string" } },
   required: ["text"],
 } as const;
 
 const cancelBody = {
   type: "object",
-  properties: { sessionId: { type: "string" }, turnId: { type: "string" } },
+  properties: { sessionId: { type: ["string", "null"] }, turnId: { type: ["string", "null"] } },
 } as const;
 
 const approvalBody = {
   type: "object",
   properties: {
-    sessionId: { type: "string" },
+    sessionId: { type: ["string", "null"] },
     approvalId: { type: "string" },
     choiceId: { type: "string" },
   },
   required: ["approvalId", "choiceId"],
 } as const;
 
+// Smallest page cap: history/snapshot return the tail; pass ?limit= for more (max 200).
+// shortcut: the slice runs after fold.items.list() materializes the full list;
+// push the limit into the fold once the SDK supports bounded reads.
+function queryLimit(query: unknown, fallback = 50): number {
+  const raw = (query as { limit?: unknown } | undefined)?.limit;
+  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(n) && (n as number) > 0 ? Math.min(n as number, 200) : fallback;
+}
+
 export function createServer(host: Host): FastifyInstance {
-  const app = Fastify({ bodyLimit: 1_000_000 });
+  const app = Fastify({ bodyLimit: 1_000_000, requestTimeout: 30_000 });
 
   // Middleware: every response carries its own latency.
   const started = new WeakMap<object, number>();
@@ -102,16 +111,19 @@ export function createServer(host: Host): FastifyInstance {
   });
   app.addHook("onSend", (req, reply, payload, done) => {
     reply.header("x-response-time", `${Date.now() - (started.get(req) ?? Date.now())}ms`);
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("content-security-policy", "default-src 'self'");
     done(null, payload);
   });
 
+  // Generic messages only: never reflect ids, paths, or upstream detail.
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof UnknownSessionError) {
-      reply.code(404).send({ error: err.message.slice(0, 300) });
+      reply.code(404).send({ error: "unknown session" });
       return;
     }
     if (err instanceof UnknownApprovalError) {
-      reply.code(410).send({ error: err.message.slice(0, 300) });
+      reply.code(410).send({ error: "stale approval" });
       return;
     }
     const status = typeof err.statusCode === "number" ? err.statusCode : 500;
@@ -120,15 +132,19 @@ export function createServer(host: Host): FastifyInstance {
       reply.code(500).send({ error: "internal error" });
       return;
     }
-    reply.code(status).send({ error: err.message.slice(0, 300) });
+    if (status === 404) {
+      reply.code(404).send({ error: "not found" });
+      return;
+    }
+    reply.code(status).send({ error: "bad request" });
   });
 
   // SSE stream of hub events. Snapshot first so a reconnect recovers
   // missed items, approvals, and questions; the live tail follows.
   // The snapshot runs before headers, so a stale session gets a 404.
   app.get("/events", async (req, reply) => {
-    const sessionId =
-      (req.query as { sessionId?: string } | undefined)?.sessionId ?? host.defaultSessionId;
+    const q = req.query as { sessionId?: string; limit?: string } | undefined;
+    const sessionId = q?.sessionId ?? host.defaultSessionId;
     const snap = host.snapshot(sessionId);
     reply.hijack();
     const res = reply.raw;
@@ -141,7 +157,7 @@ export function createServer(host: Host): FastifyInstance {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     send("ready", { sessionId });
-    send("snapshot", snap);
+    send("snapshot", { ...snap, items: snap.items.slice(-queryLimit(q)) });
     // One tab wants one session: drop other sessions here instead of making
     // every tab filter the full fan-out. Events without a session still pass.
     const off = host.onEvent((event, data) => {
@@ -170,7 +186,7 @@ export function createServer(host: Host): FastifyInstance {
       return await host.listProfiles();
     } catch (e) {
       console.error("profiles:", e);
-      return { profiles: [], error: String(e).slice(0, 300) };
+      return { profiles: [], error: "profiles unavailable" };
     }
   });
 
@@ -180,20 +196,22 @@ export function createServer(host: Host): FastifyInstance {
       const sessionId = await host.startSession(body.profile);
       return { sessionId, profile: body.profile ?? null };
     } catch (e) {
-      throw Object.assign(new Error(String(e).slice(0, 300)), { statusCode: 400 });
+      req.log.error(e);
+      fail(400, "bad request");
     }
   });
 
   app.get("/api/history", async (req) => {
-    const sessionId =
-      (req.query as { sessionId?: string } | undefined)?.sessionId ?? host.defaultSessionId;
-    return { history: host.history(sessionId) };
+    const q = req.query as { sessionId?: string; limit?: string } | undefined;
+    const sessionId = q?.sessionId ?? host.defaultSessionId;
+    const h = host.history(sessionId);
+    return { history: { mode: h.mode, items: h.items.slice(-queryLimit(q)) } };
   });
 
   app.post("/api/turn", { schema: { body: turnBody } }, async (req) => {
     const body = req.body as { sessionId?: string; text?: string };
     if (typeof body.text !== "string" || !body.text.trim()) {
-      throw Object.assign(new Error("text is required"), { statusCode: 400 });
+      fail(400, "text is required");
     }
     return host.sendTurn(body.sessionId ?? host.defaultSessionId, body.text);
   });
@@ -208,7 +226,7 @@ export function createServer(host: Host): FastifyInstance {
   app.post("/api/approval", { schema: { body: approvalBody } }, async (req) => {
     const body = req.body as { sessionId?: string; approvalId?: string; choiceId?: string };
     if (typeof body.approvalId !== "string" || typeof body.choiceId !== "string") {
-      throw Object.assign(new Error("approvalId and choiceId are required"), { statusCode: 400 });
+      fail(400, "approvalId and choiceId are required");
     }
     host.decideApproval(body.sessionId ?? host.defaultSessionId, body.approvalId, body.choiceId);
     return { approvalId: body.approvalId, choiceId: body.choiceId };
@@ -217,9 +235,7 @@ export function createServer(host: Host): FastifyInstance {
   app.post("/api/user-input", async (req) => {
     const body = req.body as { sessionId?: string } & Record<string, unknown>;
     if (!validAnswers(body)) {
-      throw Object.assign(new Error("userInputId and one answer per question are required"), {
-        statusCode: 400,
-      });
+      fail(400, "userInputId and one answer per question are required");
     }
     return host.answerUserInput(
       body.sessionId ?? host.defaultSessionId,
@@ -238,10 +254,10 @@ export function createServer(host: Host): FastifyInstance {
     try {
       return await evaluate(state, questions, model);
     } catch (e) {
-      // The shared handler would mask 5xx as "internal error"; keep the cause.
+      req.log.error(e);
       const status = (e as { statusCode?: number }).statusCode ?? 500;
-      if (status >= 500) req.log.error(e);
-      return reply.code(status).send({ error: String((e as Error).message).slice(0, 300) });
+      const code = status >= 400 && status < 600 ? status : 500;
+      return reply.code(code).send({ error: code === 400 ? "bad request" : "evaluation failed" });
     }
   });
 
@@ -254,7 +270,7 @@ export function createServer(host: Host): FastifyInstance {
     const file = url.pathname === "/" ? "/index.html" : url.pathname;
     const target = path.normalize(path.join(PUBLIC, file));
     if (!target.startsWith(PUBLIC + path.sep)) {
-      return reply.code(404).send("not found");
+      return reply.code(404).send({ error: "not found" });
     }
     let stat: fs.Stats;
     try {
@@ -265,17 +281,21 @@ export function createServer(host: Host): FastifyInstance {
         try {
           await fs.promises.stat(path.join(PUBLIC, "index.html"));
         } catch {
-          return reply.code(404).send("not found");
+          return reply.code(404).send({ error: "not found" });
         }
-        return reply.type("text/html").send(fs.createReadStream(path.join(PUBLIC, "index.html")));
+        return reply.type("text/html").header("Cache-Control", "no-cache").send(fs.createReadStream(path.join(PUBLIC, "index.html")));
       }
-      return reply.code(404).send("not found");
+      return reply.code(404).send({ error: "not found" });
     }
     if (stat.isDirectory()) {
-      return reply.code(404).send("not found");
+      return reply.code(404).send({ error: "not found" });
     }
+    // shortcut: ETag has no If-None-Match/304 handling; add conditional GET when bandwidth matters.
+    const ext = path.extname(target).toLowerCase();
     return reply
-      .type(MIME[path.extname(target).toLowerCase()] ?? "text/plain")
+      .type(MIME[ext] ?? "application/octet-stream")
+      .header("ETag", `"${stat.size}-${Number(stat.mtimeMs).toString(36)}"`)
+      .header("Cache-Control", ext === ".html" ? "no-cache" : "public, max-age=3600")
       .send(fs.createReadStream(target));
   });
 

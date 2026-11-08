@@ -17,7 +17,7 @@ import {
 
 type ApprovalRequest = Parameters<ApprovalHandler>[0];
 
-// MSP host on the SDK facade (docs/how-it-works.html: the NODE APP box).
+// MSP host on the SDK facade (docs/api-server.html: the Host facade).
 // The client routes every server event to its session, so the fold behind
 // each session stays gap-recovered; this layer only fans out to browsers.
 export async function startHost(): Promise<Host> {
@@ -50,7 +50,7 @@ export async function startHost(): Promise<Host> {
 
   // Raw fan-out for the browser; the client's own router already folded first.
   msp.connection.onNotification((notification) => {
-    if (notification.method === "approval/resolved") {
+    if (notification.method === "approval/resolved" || notification.method === "approval/failed") {
       const id = (notification.params as { approvalId?: unknown }).approvalId;
       if (typeof id === "string") approvals.delete(id); // dangling handler promises stay the router's to drop
     }
@@ -146,6 +146,9 @@ export async function startHost(): Promise<Host> {
       return needSession(sessionId).answerUserInput(userInputId, answers);
     },
 
+    // Unbounded fold reads; server.ts slices the tail per ?limit=. Push the
+    // limit into the fold once the SDK supports bounded reads.
+    // shortcut: pending approvals/userInputs are uncapped live sets; bound them when sessions run for days.
     history(sessionId: string) {
       return { mode: "inline" as const, items: needSession(sessionId).fold.items.list() };
     },

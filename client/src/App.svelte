@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { chat } from "./lib/chat.svelte";
-  import { shape } from "./shape";
+  import { chat } from "./lib/chat.svelte.ts";
+  import { shape } from "./shape.ts";
   import TopBar from "./components/TopBar.svelte";
   import SidePanel from "./components/SidePanel.svelte";
   import ChatLog from "./components/ChatLog.svelte";
@@ -10,7 +10,7 @@
   import LwcHello from "./components/LwcHello.svelte";
   import HelloPage from "./components/HelloPage.svelte";
   import JudgePage from "./components/JudgePage.svelte";
-  import { route } from "./lib/router.svelte";
+  import { route } from "./lib/router.svelte.ts";
 
   // Shape lives in ./shape.ts. To reshape, move one panel tag below
   // (each owns its grid wrapper) or flip a flag in shape.ts.

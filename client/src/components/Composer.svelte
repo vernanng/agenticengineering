@@ -1,16 +1,14 @@
 <script lang="ts">
-  import type { ChatStore } from "../lib/chat.svelte";
+  import type { ChatStore } from "../lib/chat.svelte.ts";
 
   let { chat }: { chat: ChatStore } = $props();
 
   let text = $state("");
 
-  function onsubmit(e: SubmitEvent) {
+  async function onsubmit(e: SubmitEvent) {
     e.preventDefault();
     if (!text.trim()) return;
-    const pending = text;
-    text = "";
-    void chat.sendText(pending);
+    if (await chat.sendText(text)) text = "";
   }
 </script>
 

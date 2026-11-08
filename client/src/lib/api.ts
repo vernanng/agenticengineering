@@ -19,15 +19,23 @@ export async function evaluate(
   model?: string,
   sink?: TrafficSink,
 ): Promise<{ model: string; answers: Record<string, unknown>; usage: unknown }> {
-  return api(
+  return apiPost(
     "/api/evaluate",
+    { state, questions, model },
+    sink,
+  ) as Promise<{ model: string; answers: Record<string, unknown>; usage: unknown }>;
+}
+
+export function apiPost(path: string, body: unknown, sink?: TrafficSink): Promise<unknown> {
+  return api(
+    path,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state, questions, model }),
+      body: JSON.stringify(body),
     },
     sink,
-  ) as Promise<{ model: string; answers: Record<string, unknown>; usage: unknown }>;
+  );
 }
 
 export async function api(path: string, opts?: RequestInit, sink?: TrafficSink): Promise<unknown> {

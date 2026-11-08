@@ -23,7 +23,7 @@ if (fs.existsSync(DOTENV)) {
 
 const QUESTION_TYPES = new Set(["noul", "choice", "score", "box"]);
 
-function fail(statusCode: number, message: string): never {
+export function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
 }
 
@@ -36,13 +36,28 @@ export function validEvaluateBody(body: unknown): body is {
   const { state, questions, model } = body as Record<string, unknown>;
   if (typeof state === "string" ? !state.trim() : state === null || state === undefined) return false;
   if (typeof state !== "string" && typeof state !== "object") return false;
+  if (typeof state === "string" && state.length > 100_000) return false;
   if (!questions || typeof questions !== "object" || Array.isArray(questions)) return false;
   const entries = Object.entries(questions);
-  if (entries.length === 0 || (model !== undefined && typeof model !== "string")) return false;
+  if (entries.length === 0 || entries.length > 32) return false;
+  if (model !== undefined && (typeof model !== "string" || model.length === 0 || model.length > 128))
+    return false;
   return entries.every(([name, q]) => {
     if (!name || !q || typeof q !== "object" || Array.isArray(q)) return false;
-    const { type, instructions } = q as Record<string, unknown>;
-    return QUESTION_TYPES.has(type as string) && typeof instructions === "string" && instructions.trim() !== "";
+    const { type, instructions, criteria } = q as Record<string, unknown>;
+    if (
+      !QUESTION_TYPES.has(type as string) ||
+      typeof instructions !== "string" ||
+      instructions.trim() === "" ||
+      instructions.length > 8000
+    )
+      return false;
+    // Shape per question type (docs/primitives): a choice needs its option
+    // map and a score its level list, or the upstream call fails after a 200.
+    if (type === "choice")
+      return !!criteria && typeof criteria === "object" && !Array.isArray(criteria) && Object.keys(criteria).length > 0;
+    if (type === "score") return Array.isArray(criteria) && criteria.length >= 2;
+    return true;
   });
 }
 
@@ -51,14 +66,20 @@ export async function evaluate(state: unknown, questions: unknown, model?: strin
   if (!apiKey) fail(500, "TYPESAFE_API_KEY is not set");
   const endpoint = (process.env.TYPESAFE_BASE_URL || DEFAULT_ENDPOINT).replace(/\/+$/, "");
   const resolvedModel = model || process.env.TYPESAFE_MODEL || DEFAULT_MODEL;
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: resolvedModel, state, questions }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
-  if (!res.ok) {
-    fail(502, typeof data.detail === "string" ? data.detail : `typesafe answered ${res.status}`);
+  const payload = JSON.stringify({ model: resolvedModel, state, questions });
+  if (payload.length > 1_000_000) fail(400, "request too large");
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: payload,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    fail(502, "evaluation failed");
   }
+  const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  if (!res.ok) fail(502, "evaluation failed");
   return data as { model: string; answers: Record<string, unknown>; usage: unknown };
 }

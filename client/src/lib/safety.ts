@@ -15,15 +15,24 @@ export interface SafetyVerdict {
   noul: number;
 }
 
+export function approvalTitle(request: ApprovalRequest): string {
+  return request.subject?.title ?? request.toolCallId ?? request.subject?.kind ?? "tool call";
+}
+
 export function approvalStateText(request: ApprovalRequest): string {
-  const head = request.subject?.title ?? request.toolCallId ?? request.subject?.kind ?? "tool call";
+  const head = approvalTitle(request);
   const args = (request.rawArgs ?? "").slice(0, 2000);
   return args ? `${head}\n${args}` : head;
 }
 
-// The narrow one-shot grant only: never a session-wide or persistent one.
+// The narrow one-shot grant only: an "approved" decision is not enough, a
+// session-wide or persistent grant (scope "session"/"localPersistent") must
+// never auto-approve. Missing scope stays eligible: the gate picks by
+// decision, never by choiceId, and old callers send no scope.
 export function approveOnceChoice(choices: ApprovalChoice[]): ApprovalChoice | undefined {
-  return choices.find((c) => c.decision === "approved");
+  return choices.find(
+    (c) => c.decision === "approved" && (c.scope === undefined || c.scope === "once"),
+  );
 }
 
 export async function judgeApproval(

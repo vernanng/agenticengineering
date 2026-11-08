@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatStore } from "../lib/chat.svelte";
+  import type { ChatStore } from "../lib/chat.svelte.ts";
 
   let { chat }: { chat: ChatStore } = $props();
   let open = $state(false);
