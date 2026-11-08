@@ -10,4 +10,8 @@
     <p><button class="navlink" onclick={() => navigate("/")}>← Back to dashboard</button></p>
   </div>
   <LwcHello />
+  <div class="panel">
+    <h2>About this route</h2>
+    <p class="muted">This element only renders on /hello, outside the chat shell.</p>
+  </div>
 </div>

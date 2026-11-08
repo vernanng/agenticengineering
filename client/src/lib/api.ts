@@ -12,6 +12,24 @@ export function itemText(item: unknown): string {
   return details.length > 500 ? details.slice(0, 500) + "…" : details;
 }
 
+// TypeSafe System One via the hub (key stays server-side).
+export async function evaluate(
+  state: unknown,
+  questions: Record<string, unknown>,
+  model?: string,
+  sink?: TrafficSink,
+): Promise<{ model: string; answers: Record<string, unknown>; usage: unknown }> {
+  return api(
+    "/api/evaluate",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state, questions, model }),
+    },
+    sink,
+  ) as Promise<{ model: string; answers: Record<string, unknown>; usage: unknown }>;
+}
+
 export async function api(path: string, opts?: RequestInit, sink?: TrafficSink): Promise<unknown> {
   if (opts?.body) sink?.("out", path, JSON.parse(opts.body as string));
   else sink?.("out", path, null);

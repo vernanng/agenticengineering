@@ -25,9 +25,13 @@
     <span class="sess" title={chat.sessionId ?? ""}>{chat.sessionId ?? "connecting…"}</span>
   </div>
   <div class="topactions">
-    {#if route.path === "/hello"}
+    {#if route.path !== "/"}
       <button class="ghost" onclick={() => navigate("/")}>Dashboard</button>
-    {:else}
+    {/if}
+    {#if route.path !== "/judge"}
+      <button class="ghost" onclick={() => navigate("/judge")}>Judge</button>
+    {/if}
+    {#if route.path !== "/hello"}
       <button class="ghost" onclick={() => navigate("/hello")}>LWC demo</button>
     {/if}
     <SettingsMenu chat={chat} />

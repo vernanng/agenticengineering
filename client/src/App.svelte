@@ -9,6 +9,7 @@
   import Composer from "./components/Composer.svelte";
   import LwcHello from "./components/LwcHello.svelte";
   import HelloPage from "./components/HelloPage.svelte";
+  import JudgePage from "./components/JudgePage.svelte";
   import { route } from "./lib/router.svelte";
 
   // Shape lives in ./shape.ts. To reshape, move one panel tag below
@@ -25,6 +26,8 @@
 
 {#if route.path === "/hello"}
   <HelloPage />
+{:else if route.path === "/judge"}
+  <JudgePage chat={chat} />
 {:else}
   <LwcHello />
 

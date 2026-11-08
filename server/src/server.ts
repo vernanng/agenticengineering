@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { evaluate, validEvaluateBody } from "./typesafe.ts";
 
 export class UnknownSessionError extends Error {}
 export class UnknownApprovalError extends Error {}
@@ -225,6 +226,23 @@ export function createServer(host: Host): FastifyInstance {
       body.userInputId,
       body.answers,
     );
+  });
+
+  // TypeSafe System One: typed judgments (choice/score/noul/box) over a state.
+  // The hub forwards the call with its key; the browser never sees the secret.
+  app.post("/api/evaluate", async (req, reply) => {
+    if (!validEvaluateBody(req.body)) {
+      return reply.code(400).send({ error: "state and at least one typed question are required" });
+    }
+    const { state, questions, model } = req.body;
+    try {
+      return await evaluate(state, questions, model);
+    } catch (e) {
+      // The shared handler would mask 5xx as "internal error"; keep the cause.
+      const status = (e as { statusCode?: number }).statusCode ?? 500;
+      if (status >= 500) req.log.error(e);
+      return reply.code(status).send({ error: String((e as Error).message).slice(0, 300) });
+    }
   });
 
   // Static frontend. Unmatched methods and paths land here, as before.
