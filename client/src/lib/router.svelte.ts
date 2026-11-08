@@ -1,0 +1,19 @@
+// Tiny path router. Routes are exact matches; anything else renders "/".
+// shortcut: hand-rolled on purpose, a router dep is heavier than this file.
+export type Route = "/" | "/hello";
+
+function current(): Route {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname === "/hello" ? "/hello" : "/";
+}
+
+export const route = $state<Route>(current());
+
+export function navigate(to: Route) {
+  history.pushState(null, "", to);
+  route.path = current();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("popstate", () => (route.path = current()));
+}

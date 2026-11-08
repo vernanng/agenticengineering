@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createServer, UnknownApprovalError, UnknownSessionError } from "../src/server.ts";
+
+const hasDist = existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "client", "dist", "index.html"));
 
 function fakeHost() {
   const calls: unknown[][] = [];
@@ -142,6 +147,18 @@ describe("hub routes", () => {
       const res = await fetch(`${base}/api/nope`);
       assert.equal(res.status, 404);
       assert.deepEqual(await res.json(), { error: "not found" });
+    });
+  });
+
+  // Needs a client build; without dist there is no shell to fall back to.
+  it("falls back to index.html for route paths", { skip: !hasDist }, async () => {
+    const { host } = fakeHost();
+    await withServer(host, async (base) => {
+      const res = await fetch(`${base}/hello`);
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+      const root = await fetch(`${base}/`);
+      assert.equal(await res.text(), await root.text());
     });
   });
 

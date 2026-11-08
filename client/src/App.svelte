@@ -7,6 +7,9 @@
   import ChatLog from "./components/ChatLog.svelte";
   import InspectorPanel from "./components/InspectorPanel.svelte";
   import Composer from "./components/Composer.svelte";
+  import LwcHello from "./components/LwcHello.svelte";
+  import HelloPage from "./components/HelloPage.svelte";
+  import { route } from "./lib/router.svelte";
 
   // Shape lives in ./shape.ts. To reshape, move one panel tag below
   // (each owns its grid wrapper) or flip a flag in shape.ts.
@@ -20,14 +23,20 @@
 
 <TopBar chat={chat} />
 
-<div class="shell" data-layout={shape.layout}>
-  {#if shape.layout === "triple"}
-    <SidePanel chat={chat} />
-  {/if}
-  <ChatLog chat={chat} />
-  {#if shape.layout === "triple" || shape.layout === "focus"}
-    <InspectorPanel chat={chat} />
-  {/if}
-</div>
+{#if route.path === "/hello"}
+  <HelloPage />
+{:else}
+  <LwcHello />
 
-<Composer chat={chat} />
+  <div class="shell" data-layout={shape.layout}>
+    {#if shape.layout === "triple"}
+      <SidePanel chat={chat} />
+    {/if}
+    <ChatLog chat={chat} />
+    {#if shape.layout === "triple" || shape.layout === "focus"}
+      <InspectorPanel chat={chat} />
+    {/if}
+  </div>
+
+  <Composer chat={chat} />
+{/if}

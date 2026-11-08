@@ -242,6 +242,15 @@ export function createServer(host: Host): FastifyInstance {
     try {
       stat = await fs.promises.stat(target);
     } catch {
+      // SPA fallback: route-like paths serve the app shell so client routes load by deep link.
+      if (!url.pathname.startsWith("/api/") && path.extname(url.pathname) === "") {
+        try {
+          await fs.promises.stat(path.join(PUBLIC, "index.html"));
+        } catch {
+          return reply.code(404).send("not found");
+        }
+        return reply.type("text/html").send(fs.createReadStream(path.join(PUBLIC, "index.html")));
+      }
       return reply.code(404).send("not found");
     }
     if (stat.isDirectory()) {
